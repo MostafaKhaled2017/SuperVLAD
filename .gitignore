@@ -1,0 +1,9 @@
+datasets
+checkpoints
+venv
+test
+__pycache__
+Notes.md
+
+*.pth
+Miniconda3-latest-Linux-x86_64.sh
