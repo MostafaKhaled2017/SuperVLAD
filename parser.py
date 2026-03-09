@@ -75,6 +75,23 @@ def parse_arguments():
     parser.add_argument("--train_positives_dist_threshold", type=int, default=10, help="_")
     parser.add_argument('--recall_values', type=int, default=[1, 5, 10, 100], nargs="+",
                         help="Recalls to be computed, such as R@5.")
+    parser.add_argument("--enable_retrieval_diagnostics", action='store_true',
+                        help="Enable retrieval evaluation diagnostics and file export.")
+    parser.add_argument("--return_debug_metrics", action='store_true',
+                        help="Request pooling debug metrics during retrieval diagnostics evaluation.")
+    parser.add_argument("--token_keep_ratio", type=float, default=1.0,
+                        help="Optional token keep ratio for eval-time masking hooks.")
+    parser.add_argument("--token_keep_ratios", type=float, default=None, nargs="+",
+                        help="Optional list of token keep ratios for future eval sweeps.")
+    parser.add_argument("--masking_mode", type=str, default="none",
+                        choices=["none", "random"],
+                        help="Optional masking mode for eval-time token filtering.")
+    parser.add_argument("--low_mass_threshold", type=float, default=1e-3,
+                        help="Threshold used for low-mass cluster statistics.")
+    parser.add_argument("--token_dropout_seed", type=int, default=0,
+                        help="Seed used by eval-time token masking logic.")
+    parser.add_argument("--retrieval_diagnostics_output_dir", type=str, default=None,
+                        help="Optional subdirectory inside the eval run directory for retrieval diagnostics exports.")
     # Data augmentation parameters
     parser.add_argument("--brightness", type=float, default=None, help="_")
     parser.add_argument("--contrast", type=float, default=None, help="_")
@@ -120,4 +137,3 @@ def parse_arguments():
         raise ValueError("Please specify --pca_dataset_folder when using pca")
     
     return args
-
