@@ -57,7 +57,7 @@ class SuperVLAD(nn.Module):
             self.conv.weight = nn.Parameter(torch.from_numpy(self.alpha*centroids_assign).unsqueeze(2).unsqueeze(3))
         self.conv.bias = None
 
-    def forward(self, x):
+    def forward(self, x, return_debug=False, low_mass_threshold=1e-3, token_mask=None):
         if self.work_with_tokens:
             x = x.permute(0, 2, 1)
             N, D, _ = x.shape[:]
@@ -68,6 +68,13 @@ class SuperVLAD(nn.Module):
         x_flatten = x.view(N, D, -1)
         soft_assign = self.conv(x).view(N, self.clusters_num, -1)
         soft_assign = F.softmax(soft_assign, dim=1)
+        active_token_count = x_flatten.shape[-1]
+        if token_mask is not None:
+            token_mask = token_mask.to(device=x_flatten.device, dtype=x_flatten.dtype)
+            token_mask = token_mask.view(N, 1, -1)
+            x_flatten = x_flatten * token_mask
+            soft_assign = soft_assign * token_mask
+            active_token_count = token_mask.sum(dim=2).squeeze(1)
         vlad = torch.zeros([N, self.clusters_num, D], dtype=x_flatten.dtype, device=x_flatten.device)
         for D in range(self.clusters_num):  # Slower than non-looped, but lower memory usage
             residual = x_flatten.unsqueeze(0).permute(1, 0, 2, 3)
@@ -77,7 +84,35 @@ class SuperVLAD(nn.Module):
         vlad = F.normalize(vlad, p=2, dim=2)  # intra-normalization
         vlad = vlad.view(N, -1)  # Flatten
         vlad = F.normalize(vlad, p=2, dim=1)  # L2 normalize
-        return vlad
+        if not return_debug:
+            return vlad
+
+        cluster_mass = soft_assign.sum(dim=2)
+        active_cluster_mass = cluster_mass[:, :-self.ghost_clusters_num] if self.ghost_clusters_num > 0 else cluster_mass
+        sorted_mass, _ = torch.sort(active_cluster_mass, dim=1)
+        p10_index = min(active_cluster_mass.shape[1] - 1, max(0, int(0.1 * active_cluster_mass.shape[1])))
+        token_entropy = -(soft_assign * torch.log(soft_assign.clamp_min(1e-12))).sum(dim=1)
+        if token_mask is not None:
+            token_mask_flat = token_mask.squeeze(1)
+            assign_entropy = token_entropy.sum(dim=1) / token_mask_flat.sum(dim=1).clamp_min(1.0)
+        else:
+            assign_entropy = token_entropy.mean(dim=1)
+
+        debug = {
+            "soft_assignments": soft_assign,
+            "per_cluster_mass": active_cluster_mass,
+            "all_cluster_mass": cluster_mass,
+            "min_mass": active_cluster_mass.min(dim=1).values,
+            "max_mass": active_cluster_mass.max(dim=1).values,
+            "mean_mass": active_cluster_mass.mean(dim=1),
+            "p10_mass": sorted_mass[:, p10_index],
+            "num_low_mass_clusters": (active_cluster_mass < low_mass_threshold).sum(dim=1),
+            "low_mass_threshold": low_mass_threshold,
+            "token_count": active_token_count,
+            "assignment_entropy": assign_entropy,
+            "token_mask": token_mask.squeeze(1) if token_mask is not None else None,
+        }
+        return vlad, debug
 
     def initialize_supervlad_layer(self, args, cluster_ds, model):
         backbone = model.backbone

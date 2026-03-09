@@ -51,33 +51,197 @@ class SuperVLADModel(nn.Module):
                                              L2Norm())
             args.features_dim = args.fc_output_dim
 
-    def forward(self, x, queryflag=0):
+    @staticmethod
+    def _build_token_grid(height, width, device):
+        rows = torch.arange(height, device=device)
+        cols = torch.arange(width, device=device)
+        grid_y, grid_x = torch.meshgrid(rows, cols)
+        return torch.stack((grid_y, grid_x), dim=-1).view(-1, 2)
+
+    @staticmethod
+    def _make_random_token_mask(mask, keep_count, token_count, sample_seed):
+        generator = None
+        if sample_seed is not None:
+            generator = torch.Generator(device="cpu")
+            generator.manual_seed(sample_seed)
+        kept_tokens = torch.randperm(token_count, generator=generator)[:keep_count]
+        mask[kept_tokens.to(mask.device)] = 1.0
+        return mask
+
+    @staticmethod
+    def _make_center_keep_mask(mask, keep_count, height, width):
+        if keep_count >= height * width:
+            mask.fill_(1.0)
+            return mask
+        center_h = min(height, max(1, int(round(math.sqrt(keep_count * height / width)))))
+        center_w = min(width, max(1, int(math.ceil(keep_count / center_h))))
+        center_h = min(height, max(1, center_h))
+        center_w = min(width, max(1, center_w))
+        while center_h * center_w < keep_count:
+            if center_w < width:
+                center_w += 1
+            elif center_h < height:
+                center_h += 1
+            else:
+                break
+        start_h = max(0, (height - center_h) // 2)
+        start_w = max(0, (width - center_w) // 2)
+        mask_2d = mask.view(height, width)
+        mask_2d[start_h:start_h + center_h, start_w:start_w + center_w] = 1.0
+        return mask
+
+    @staticmethod
+    def _make_block_keep_mask(mask, keep_count, height, width, sample_seed):
+        if keep_count >= height * width:
+            mask.fill_(1.0)
+            return mask
+        block_h = min(height, max(1, int(round(math.sqrt(keep_count * height / width)))))
+        block_w = min(width, max(1, int(math.ceil(keep_count / block_h))))
+        block_h = min(height, max(1, block_h))
+        block_w = min(width, max(1, block_w))
+        while block_h * block_w < keep_count:
+            if block_w < width:
+                block_w += 1
+            elif block_h < height:
+                block_h += 1
+            else:
+                break
+        max_h = max(0, height - block_h)
+        max_w = max(0, width - block_w)
+        generator = None
+        if sample_seed is not None:
+            generator = torch.Generator(device="cpu")
+            generator.manual_seed(sample_seed)
+        start_h = 0 if max_h == 0 else int(torch.randint(max_h + 1, (1,), generator=generator).item())
+        start_w = 0 if max_w == 0 else int(torch.randint(max_w + 1, (1,), generator=generator).item())
+        mask_2d = mask.view(height, width)
+        mask_2d[start_h:start_h + block_h, start_w:start_w + block_w] = 1.0
+        return mask
+
+    @staticmethod
+    def _make_token_dropout_mask(token_tensor, token_keep_ratio, token_dropout_seed=None, token_dropout_ids=None,
+                                 masking_mode="random", token_grid=None):
+        if masking_mode == "none" or token_keep_ratio >= 1.0:
+            return None
+        if token_keep_ratio <= 0.0:
+            raise ValueError(f"token_keep_ratio must be > 0, got {token_keep_ratio}")
+
+        batch_size = token_tensor.shape[0]
+        token_count = token_tensor.shape[2] * token_tensor.shape[3]
+        keep_count = min(token_count, max(1, int(math.ceil(token_count * token_keep_ratio))))
+        if keep_count == token_count:
+            return None
+
+        mask = torch.zeros((batch_size, token_count), dtype=token_tensor.dtype, device=token_tensor.device)
+        if token_dropout_ids is None:
+            token_dropout_ids = range(batch_size)
+        spatial_modes = {"center", "block"}
+        supports_spatial_mask = token_tensor.dim() == 4 and token_grid is not None
+        if masking_mode in spatial_modes and not supports_spatial_mask:
+            logging.warning("Masking mode '%s' requires spatial token coordinates; falling back to random masking.", masking_mode)
+            masking_mode = "random"
+
+        height = token_tensor.shape[2]
+        width = token_tensor.shape[3]
+
+        for batch_index, sample_id in enumerate(token_dropout_ids):
+            sample_seed = None if token_dropout_seed is None else int(token_dropout_seed) + int(sample_id)
+            if masking_mode == "random":
+                mask[batch_index] = SuperVLADModel._make_random_token_mask(
+                    mask[batch_index], keep_count, token_count, sample_seed
+                )
+            elif masking_mode == "center":
+                mask[batch_index] = SuperVLADModel._make_center_keep_mask(
+                    mask[batch_index], keep_count, height, width
+                )
+            elif masking_mode == "block":
+                mask[batch_index] = SuperVLADModel._make_block_keep_mask(
+                    mask[batch_index], keep_count, height, width, sample_seed
+                )
+            else:
+                raise ValueError(f"Unsupported masking_mode: {masking_mode}")
+        return mask
+
+    def _aggregate(self, x, return_debug=False, low_mass_threshold=1e-3, token_mask=None):
+        if isinstance(self.aggregation, nn.Sequential):
+            if return_debug:
+                pooled, pooling_debug = self.aggregation[0](
+                    x, return_debug=True, low_mass_threshold=low_mass_threshold, token_mask=token_mask
+                )
+            else:
+                pooled = self.aggregation[0](x, token_mask=token_mask)
+                pooling_debug = None
+            for layer in self.aggregation[1:]:
+                pooled = layer(pooled)
+            return pooled, pooling_debug
+
+        if not return_debug:
+            return self.aggregation(x, token_mask=token_mask), None
+
+        pooled, pooling_debug = self.aggregation(
+            x, return_debug=True, low_mass_threshold=low_mass_threshold, token_mask=token_mask
+        )
+        return pooled, pooling_debug
+
+    def forward(self, x, queryflag=0, return_debug=False, pool_mask=None, pool_hook=None,
+                low_mass_threshold=1e-3, token_keep_ratio=1.0, token_dropout_seed=None,
+                token_dropout_ids=None, masking_mode="none"):
         x = self.backbone(x)
+        token_tensor = None
+        token_grid = None
 
         if self.arch_name.startswith("vit"):
             B,P,D = x.last_hidden_state.shape
             W = H = int(math.sqrt(P-1))
-            x1 = x.last_hidden_state[:, 1:, :].view(B,W,H,D).permute(0, 3, 1, 2) 
-            x = self.aggregation(x1)
+            token_tensor = x.last_hidden_state[:, 1:, :].view(B, W, H, D).permute(0, 3, 1, 2)
+            token_grid = self._build_token_grid(H, W, token_tensor.device)
         elif self.arch_name.startswith("cct"):
             B,P,D = x.shape
-            x = x.view(-1,24,24,384)
-            x = x.permute(0, 3, 1, 2) 
-            x = self.aggregation(x)
+            token_tensor = x.view(-1,24,24,384).permute(0, 3, 1, 2)
+            token_grid = self._build_token_grid(24, 24, token_tensor.device)
         elif self.arch_name.startswith("dino"):
             B,P,D = x["x_prenorm"].shape
             W = H = int(math.sqrt(P-1))
             x0 = x["x_norm_clstoken"]
-            x1 = x["x_norm_patchtokens"].view(B,W,H,D).permute(0, 3, 1, 2) 
-            x = self.aggregation(x1)
+            token_tensor = x["x_norm_patchtokens"].view(B, W, H, D).permute(0, 3, 1, 2)
+            token_grid = self._build_token_grid(H, W, token_tensor.device)
         else:
-            x = self.aggregation(x)
-        
+            B, D = x.shape[:2]
+            token_tensor = x
+            if x.dim() == 4:
+                token_grid = self._build_token_grid(x.shape[2], x.shape[3], x.device)
+        if pool_mask is None and token_tensor is not None and token_tensor.dim() == 4:
+            pool_mask = self._make_token_dropout_mask(
+                token_tensor,
+                token_keep_ratio=token_keep_ratio,
+                token_dropout_seed=token_dropout_seed,
+                token_dropout_ids=token_dropout_ids,
+                masking_mode=masking_mode,
+                token_grid=token_grid,
+            )
+        if pool_hook is not None:
+            hook_output = pool_hook(token_tensor, pool_mask, token_grid)
+            if hook_output is not None:
+                token_tensor, pool_mask, token_grid = hook_output
+        x, pooling_debug = self._aggregate(
+            token_tensor, return_debug=return_debug, low_mass_threshold=low_mass_threshold, token_mask=pool_mask
+        )
+
         if self.crossimage_encoder:
             x = self.encoder(x.view(B,-1,D)).view(B,-1)
 
         x = torch.nn.functional.normalize(x, p=2, dim=-1)
-        return x
+        if not return_debug:
+            return x
+
+        return {
+            "descriptor": x,
+            "pool_debug": pooling_debug,
+            "tokens_pre_pool": token_tensor,
+            "token_positions": token_grid,
+            "pool_mask": pool_mask,
+            "pool_hook": pool_hook,
+        }
 
 
 def get_pretrained_model(args):
@@ -212,4 +376,3 @@ def get_backbone(args, pretrained_foundation, foundation_model_path):
 def get_output_channels_dim(model):
     """Return the number of channels in the output of a model."""
     return model(torch.ones([1, 3, 224, 224])).shape[1]
-
