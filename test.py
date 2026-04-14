@@ -1,14 +1,48 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+from pathlib import Path
+from typing import Any
 
 import faiss
-import torch
-import logging
 import numpy as np
-from tqdm import tqdm
+import torch
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Subset
+from tqdm import tqdm
+
+import adversarial
 
 
-def _positive_count_bin_label(positive_count):
+SUPPORTED_TEST_METHODS = [
+    "hard_resize",
+    "single_query",
+    "central_crop",
+    "five_crops",
+    "nearest_crop",
+    "maj_voting",
+]
+
+
+def top_n_voting(topn: str, predictions: np.ndarray, distances: np.ndarray, majority_weight: float) -> None:
+    if topn == "top1":
+        top_n = 1
+    elif topn == "top5":
+        top_n = 5
+    elif topn == "top10":
+        top_n = 10
+    else:
+        raise ValueError(f"Unsupported top_n_voting mode: {topn}")
+
+    top_predictions = predictions[:, :top_n]
+    unique_predictions, counts = np.unique(top_predictions, return_counts=True)
+    for pred, count in zip(unique_predictions[counts > 1], counts[counts > 1]):
+        distances[predictions == pred] -= majority_weight * count
+
+
+def _positive_count_bin_label(positive_count: int) -> str:
     if positive_count <= 0:
         return "positives_0"
     if positive_count == 1:
@@ -20,11 +54,10 @@ def _positive_count_bin_label(positive_count):
     return "positives_10_plus"
 
 
-def _compute_retrieval_per_bin_metrics(per_query_rows):
-    bins = {}
+def _compute_retrieval_per_bin_metrics(per_query_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    bins: dict[str, list[dict[str, Any]]] = {}
     for row in per_query_rows:
-        bin_label = row["bin_label"]
-        bins.setdefault(bin_label, []).append(row)
+        bins.setdefault(row["bin_label"], []).append(row)
 
     bin_order = ["positives_0", "positives_1", "positives_2_4", "positives_5_9", "positives_10_plus"]
     per_bin_rows = []
@@ -46,261 +79,461 @@ def _compute_retrieval_per_bin_metrics(per_query_rows):
     return per_bin_rows
 
 
-def _expand_token_dropout_ids(indices, test_method):
+def _expand_token_dropout_ids(indices: torch.Tensor, test_method: str) -> np.ndarray:
     sample_ids = indices.numpy()
     if test_method in ["five_crops", "nearest_crop", "maj_voting"]:
         return np.repeat(sample_ids, 5)
     return sample_ids
 
 
-def test(args, eval_ds, model, test_method="hard_resize", pca=None):
-    """Compute features of the given dataset and compute the recalls."""
-    
-    assert test_method in ["hard_resize", "single_query", "central_crop", "five_crops",
-                            "nearest_crop", "maj_voting"], f"test_method can't be {test_method}"
-    
-    if args.efficient_ram_testing:
-        return test_efficient_ram_usage(args, eval_ds, model, test_method)
-    
-    retrieval_diagnostics_enabled = getattr(args, "enable_retrieval_diagnostics", False)
-    retrieval_debug = retrieval_diagnostics_enabled and getattr(args, "return_debug_metrics", False)
+def _clear_retrieval_outputs(eval_ds: Any) -> None:
     eval_ds.retrieval_query_diagnostics = None
     eval_ds.retrieval_diagnostics_meta = None
     eval_ds.retrieval_query_debug = None
     eval_ds.retrieval_cluster_mass_stats = None
     eval_ds.retrieval_per_bin_metrics = None
 
+
+def _database_cache_payload(args: Any, eval_ds: Any) -> dict[str, Any]:
+    return {
+        "dataset_name": eval_ds.dataset_name,
+        "database_num": eval_ds.database_num,
+        "resume": args.resume,
+        "backbone": args.backbone,
+        "supervlad_clusters": args.supervlad_clusters,
+        "ghost_clusters": args.ghost_clusters,
+        "crossimage_encoder": args.crossimage_encoder,
+        "resize": list(args.resize),
+        "features_dim": args.features_dim,
+        "pca_dim": args.pca_dim,
+        "split": "test_database",
+    }
+
+
+def _database_cache_paths(args: Any, eval_ds: Any) -> tuple[Path, Path] | tuple[None, None]:
+    if args.feature_cache_dir is None:
+        return None, None
+    payload = _database_cache_payload(args, eval_ds)
+    payload_json = json.dumps(payload, sort_keys=True)
+    key = hashlib.md5(payload_json.encode("utf-8")).hexdigest()
+    cache_dir = Path(args.feature_cache_dir)
+    return cache_dir / f"database_features_{key}.npy", cache_dir / f"database_features_{key}.json"
+
+
+def _compute_batch_descriptors(
+    model: torch.nn.Module,
+    inputs: torch.Tensor,
+    args: Any,
+    token_dropout_ids: np.ndarray,
+    return_debug: bool = False,
+    token_keep_ratio: float = 1.0,
+    token_dropout_seed: int | None = None,
+    masking_mode: str = "none",
+) -> Any:
+    return model(
+        inputs.to(args.device),
+        queryflag=0,
+        return_debug=return_debug,
+        low_mass_threshold=getattr(args, "low_mass_threshold", 1e-3),
+        token_keep_ratio=token_keep_ratio,
+        token_dropout_seed=token_dropout_seed,
+        token_dropout_ids=token_dropout_ids,
+        masking_mode=masking_mode,
+    )
+
+
+def _extract_database_features(args: Any, eval_ds: Any, model: torch.nn.Module, pca: Any = None) -> np.ndarray:
+    cache_features_path, cache_meta_path = _database_cache_paths(args, eval_ds)
+    if cache_features_path is not None and cache_features_path.exists():
+        logging.info("Loading cached database descriptors from %s", cache_features_path)
+        return np.load(cache_features_path)
+
+    eval_ds.test_method = "hard_resize"
+    database_subset_ds = Subset(eval_ds, list(range(eval_ds.database_num)))
+    database_dataloader = DataLoader(
+        dataset=database_subset_ds,
+        num_workers=args.num_workers,
+        batch_size=args.infer_batch_size,
+        pin_memory=(args.device == "cuda"),
+    )
+
+    database_features = np.empty((eval_ds.database_num, args.features_dim), dtype="float32")
     model = model.eval()
     with torch.no_grad():
-        logging.debug("Extracting database features for evaluation/testing")
-        # For database use "hard_resize", although it usually has no effect because database images have same resolution
-        eval_ds.test_method = "hard_resize"
-        database_subset_ds = Subset(eval_ds, list(range(eval_ds.database_num)))
-        database_dataloader = DataLoader(dataset=database_subset_ds, num_workers=args.num_workers,
-                                        batch_size=args.infer_batch_size, pin_memory=(args.device=="cuda"))
-        
-        if test_method == "nearest_crop" or test_method == 'maj_voting':
-            all_features = np.empty((5 * eval_ds.queries_num + eval_ds.database_num, args.features_dim), dtype="float32")
-        else:
-            all_features = np.empty((len(eval_ds), args.features_dim), dtype="float32")
-
         for inputs, indices in tqdm(database_dataloader, ncols=100):
-            features = model(
-                inputs.to(args.device),
-                queryflag=0,
-                token_keep_ratio=getattr(args, "token_keep_ratio", 1.0),
-                token_dropout_seed=getattr(args, "token_dropout_seed", None),
+            descriptors = _compute_batch_descriptors(
+                model,
+                inputs,
+                args,
                 token_dropout_ids=indices.numpy(),
-                masking_mode=getattr(args, "masking_mode", "none"),
+                token_keep_ratio=1.0,
+                token_dropout_seed=None,
+                masking_mode="none",
             )
-            features = features.cpu().numpy()
-            if pca != None:
-                features = pca.transform(features)
-            all_features[indices.numpy(), :] = features
-        
-        logging.debug("Extracting queries features for evaluation/testing")
-        queries_infer_batch_size = 1 if test_method == "single_query" else args.infer_batch_size
-        eval_ds.test_method = test_method
-        queries_subset_ds = Subset(eval_ds, list(range(eval_ds.database_num, eval_ds.database_num+eval_ds.queries_num)))
-        queries_dataloader = DataLoader(dataset=queries_subset_ds, num_workers=args.num_workers,
-                                        batch_size=queries_infer_batch_size, pin_memory=(args.device=="cuda"))
-        query_debug_rows = [None] * eval_ds.queries_num if retrieval_debug else None
-        cluster_mass_rows = [None] * eval_ds.queries_num if retrieval_debug else None
-        for inputs, indices in tqdm(queries_dataloader, ncols=100):
-            if test_method == "five_crops" or test_method == "nearest_crop" or test_method == 'maj_voting':
-                inputs = torch.cat(tuple(inputs))  # shape = 5*bs x 3 x 480 x 480
-            token_dropout_ids = _expand_token_dropout_ids(indices, test_method)
-            if retrieval_debug and test_method not in ["five_crops", "nearest_crop", "maj_voting"]:
-                outputs = model(
-                    inputs.to(args.device),
-                    queryflag=0,
+            descriptors = descriptors.cpu().numpy()
+            if pca is not None:
+                descriptors = pca.transform(descriptors)
+            database_features[indices.numpy(), :] = descriptors
+
+    if cache_features_path is not None and cache_meta_path is not None:
+        cache_features_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(cache_features_path, database_features)
+        cache_meta_path.write_text(json.dumps(_database_cache_payload(args, eval_ds), indent=2))
+
+    return database_features
+
+
+def _query_mask_settings(args: Any, attack_config: adversarial.AttackConfig) -> tuple[float, int | None, str]:
+    if attack_config.attack_name == "token_mask":
+        return attack_config.token_keep_ratio, attack_config.attack_seed, attack_config.attack_mask_mode
+    return 1.0, None, "none"
+
+
+def _prepare_query_inputs(inputs: torch.Tensor, test_method: str) -> torch.Tensor:
+    if test_method in ["five_crops", "nearest_crop", "maj_voting"]:
+        return torch.cat(tuple(inputs))
+    return inputs
+
+
+def _extract_query_debug_rows(
+    pool_debug: dict[str, torch.Tensor],
+    query_indexes: np.ndarray,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    query_debug_rows = []
+    cluster_mass_rows = []
+    per_cluster_mass = pool_debug["per_cluster_mass"].cpu().numpy()
+    for batch_pos, query_index in enumerate(query_indexes):
+        token_count_value = pool_debug["token_count"]
+        if torch.is_tensor(token_count_value):
+            if token_count_value.numel() == 1:
+                token_count_value = int(token_count_value.item())
+            else:
+                token_count_value = int(token_count_value[batch_pos].item())
+        else:
+            token_count_value = int(token_count_value)
+
+        query_debug_rows.append({
+            "query_index": int(query_index),
+            "token_count": token_count_value,
+            "min_mass": float(pool_debug["min_mass"][batch_pos].item()),
+            "max_mass": float(pool_debug["max_mass"][batch_pos].item()),
+            "mean_mass": float(pool_debug["mean_mass"][batch_pos].item()),
+            "p10_mass": float(pool_debug["p10_mass"][batch_pos].item()),
+            "num_low_mass_clusters": int(pool_debug["num_low_mass_clusters"][batch_pos].item()),
+            "assignment_entropy": float(pool_debug["assignment_entropy"][batch_pos].item()),
+        })
+        cluster_row = {"query_index": int(query_index)}
+        for cluster_idx, cluster_mass in enumerate(per_cluster_mass[batch_pos]):
+            cluster_row[f"cluster_mass_{cluster_idx}"] = float(cluster_mass)
+        cluster_mass_rows.append(cluster_row)
+    return query_debug_rows, cluster_mass_rows
+
+
+def _extract_query_features(
+    args: Any,
+    eval_ds: Any,
+    model: torch.nn.Module,
+    test_method: str,
+    pca: Any,
+    database_features: np.ndarray,
+    attack_config: adversarial.AttackConfig,
+) -> tuple[np.ndarray, list[dict[str, Any]] | None, list[dict[str, Any]] | None]:
+    queries_infer_batch_size = 1 if test_method == "single_query" else args.infer_batch_size
+    eval_ds.test_method = test_method
+    queries_subset_ds = Subset(eval_ds, list(range(eval_ds.database_num, eval_ds.database_num + eval_ds.queries_num)))
+    queries_dataloader = DataLoader(
+        dataset=queries_subset_ds,
+        num_workers=args.num_workers,
+        batch_size=queries_infer_batch_size,
+        pin_memory=(args.device == "cuda"),
+    )
+
+    if test_method in ["nearest_crop", "maj_voting"]:
+        query_features = np.empty((5 * eval_ds.queries_num, args.features_dim), dtype="float32")
+    else:
+        query_features = np.empty((eval_ds.queries_num, args.features_dim), dtype="float32")
+
+    retrieval_debug = getattr(args, "enable_retrieval_diagnostics", False) and getattr(args, "return_debug_metrics", False)
+    query_debug_rows = [None] * eval_ds.queries_num if retrieval_debug else None
+    cluster_mass_rows = [None] * eval_ds.queries_num if retrieval_debug else None
+
+    database_descriptors_device = None
+    if attack_config.attack_name in adversarial.WHITEBOX_ATTACKS:
+        database_descriptors_device = torch.as_tensor(database_features, device=args.device, dtype=torch.float32)
+
+    model = model.eval()
+    for inputs, indices in tqdm(queries_dataloader, ncols=100):
+        prepared_inputs = _prepare_query_inputs(inputs, test_method)
+        token_dropout_ids = _expand_token_dropout_ids(indices, test_method)
+        query_indices = (indices.numpy() - eval_ds.database_num).tolist()
+        attack_inputs = prepared_inputs.to(args.device)
+
+        if attack_config.attack_name in adversarial.CORRUPTION_ATTACKS:
+            attack_inputs = adversarial.apply_query_attack(
+                attack_inputs,
+                query_indices,
+                attack_config,
+            )
+        elif attack_config.attack_name in adversarial.WHITEBOX_ATTACKS:
+            with torch.no_grad():
+                clean_descriptors = _compute_batch_descriptors(
+                    model,
+                    prepared_inputs,
+                    args,
+                    token_dropout_ids=token_dropout_ids,
+                    token_keep_ratio=1.0,
+                    token_dropout_seed=None,
+                    masking_mode="none",
+                ).cpu().numpy()
+            reference_pairs = adversarial.compute_reference_pairs(
+                clean_query_features=clean_descriptors,
+                database_features=database_features,
+                positives_per_query=eval_ds.get_positives(),
+                query_indices=query_indices,
+            )
+            attack_inputs = adversarial.apply_query_attack(
+                attack_inputs,
+                query_indices,
+                attack_config,
+                model=model,
+                database_descriptors=database_descriptors_device,
+                reference_pairs=reference_pairs,
+            )
+
+        token_keep_ratio, token_dropout_seed, masking_mode = _query_mask_settings(args, attack_config)
+        if retrieval_debug and test_method not in ["five_crops", "nearest_crop", "maj_voting"]:
+            with torch.no_grad():
+                outputs = _compute_batch_descriptors(
+                    model,
+                    attack_inputs,
+                    args,
+                    token_dropout_ids=token_dropout_ids,
                     return_debug=True,
-                    low_mass_threshold=getattr(args, "low_mass_threshold", 1e-3),
-                    token_keep_ratio=getattr(args, "token_keep_ratio", 1.0),
-                    token_dropout_seed=getattr(args, "token_dropout_seed", None),
-                    token_dropout_ids=token_dropout_ids,
-                    masking_mode=getattr(args, "masking_mode", "none"),
+                    token_keep_ratio=token_keep_ratio,
+                    token_dropout_seed=token_dropout_seed,
+                    masking_mode=masking_mode,
                 )
-                features = outputs["descriptor"]
-                pool_debug = outputs["pool_debug"]
-                query_indexes = indices.numpy() - eval_ds.database_num
-                per_cluster_mass = pool_debug["per_cluster_mass"].cpu().numpy()
-                for batch_pos, query_index in enumerate(query_indexes):
-                    token_count_value = pool_debug["token_count"]
-                    if torch.is_tensor(token_count_value):
-                        if token_count_value.numel() == 1:
-                            token_count_value = int(token_count_value.item())
-                        else:
-                            token_count_value = int(token_count_value[batch_pos].item())
-                    else:
-                        token_count_value = int(token_count_value)
-                    query_debug_rows[query_index] = {
-                        "query_index": int(query_index),
-                        "token_count": token_count_value,
-                        "min_mass": float(pool_debug["min_mass"][batch_pos].item()),
-                        "max_mass": float(pool_debug["max_mass"][batch_pos].item()),
-                        "mean_mass": float(pool_debug["mean_mass"][batch_pos].item()),
-                        "p10_mass": float(pool_debug["p10_mass"][batch_pos].item()),
-                        "num_low_mass_clusters": int(pool_debug["num_low_mass_clusters"][batch_pos].item()),
-                        "assignment_entropy": float(pool_debug["assignment_entropy"][batch_pos].item()),
-                    }
-                    cluster_mass_row = {"query_index": int(query_index)}
-                    for cluster_idx, cluster_mass in enumerate(per_cluster_mass[batch_pos]):
-                        cluster_mass_row[f"cluster_mass_{cluster_idx}"] = float(cluster_mass)
-                    cluster_mass_rows[query_index] = cluster_mass_row
-            else:
-                features = model(
-                    inputs.to(args.device),
-                    queryflag=0,
-                    token_keep_ratio=getattr(args, "token_keep_ratio", 1.0),
-                    token_dropout_seed=getattr(args, "token_dropout_seed", None),
+            descriptors = outputs["descriptor"]
+            debug_rows, cluster_rows = _extract_query_debug_rows(
+                outputs["pool_debug"],
+                indices.numpy() - eval_ds.database_num,
+            )
+            for row in debug_rows:
+                query_debug_rows[row["query_index"]] = row
+            for row in cluster_rows:
+                cluster_mass_rows[row["query_index"]] = row
+        else:
+            with torch.no_grad():
+                descriptors = _compute_batch_descriptors(
+                    model,
+                    attack_inputs,
+                    args,
                     token_dropout_ids=token_dropout_ids,
-                    masking_mode=getattr(args, "masking_mode", "none"),
+                    token_keep_ratio=token_keep_ratio,
+                    token_dropout_seed=token_dropout_seed,
+                    masking_mode=masking_mode,
                 )
-            if test_method == "five_crops":  # Compute mean along the 5 crops
-                features = torch.stack(torch.split(features, 5)).mean(1)
-            features = features.cpu().numpy()
-            if pca != None:
-                features = pca.transform(features)
-            
-            if test_method == "nearest_crop" or test_method == 'maj_voting':  # store the features of all 5 crops
-                start_idx = eval_ds.database_num + (indices[0] - eval_ds.database_num) * 5
-                end_idx   = start_idx + indices.shape[0] * 5
-                indices = np.arange(start_idx, end_idx)
-                all_features[indices, :] = features
-            else:
-                all_features[indices.numpy(), :] = features
-    
-    queries_features = all_features[eval_ds.database_num:]
-    database_features = all_features[:eval_ds.database_num]
-    
+
+        if test_method == "five_crops":
+            descriptors = torch.stack(torch.split(descriptors, 5)).mean(1)
+
+        descriptors_np = descriptors.cpu().numpy()
+        if pca is not None:
+            descriptors_np = pca.transform(descriptors_np)
+
+        if test_method in ["nearest_crop", "maj_voting"]:
+            start_idx = (indices[0] - eval_ds.database_num) * 5
+            end_idx = start_idx + indices.shape[0] * 5
+            query_features[start_idx:end_idx, :] = descriptors_np
+        else:
+            query_features[indices.numpy() - eval_ds.database_num, :] = descriptors_np
+
+    if retrieval_debug:
+        query_debug_rows = [row for row in query_debug_rows if row is not None]
+        cluster_mass_rows = [row for row in cluster_mass_rows if row is not None]
+    return query_features, query_debug_rows, cluster_mass_rows
+
+
+def _search_predictions(
+    args: Any,
+    eval_ds: Any,
+    database_features: np.ndarray,
+    query_features: np.ndarray,
+    test_method: str,
+) -> tuple[faiss.IndexFlatL2, np.ndarray, np.ndarray]:
     faiss_index = faiss.IndexFlatL2(args.features_dim)
     faiss_index.add(database_features)
-    
-    logging.debug("Calculating recalls")
-    distances, predictions = faiss_index.search(queries_features, max(args.recall_values))
+    distances, predictions = faiss_index.search(query_features, max(args.recall_values))
 
-    if test_method == 'nearest_crop':
+    if test_method == "nearest_crop":
         distances = np.reshape(distances, (eval_ds.queries_num, 20 * 5))
         predictions = np.reshape(predictions, (eval_ds.queries_num, 20 * 5))
-        for q in range(eval_ds.queries_num):
-            # sort predictions by distance
-            sort_idx = np.argsort(distances[q])
-            predictions[q] = predictions[q, sort_idx]
-            # remove duplicated predictions, i.e. keep only the closest ones
-            _, unique_idx = np.unique(predictions[q], return_index=True)
-            # unique_idx is sorted based on the unique values, sort it again
-            predictions[q, :20] = predictions[q, np.sort(unique_idx)][:20]
-        predictions = predictions[:, :20]  # keep only the closer 20 predictions for each query
-    elif test_method == 'maj_voting':
+        for query_index in range(eval_ds.queries_num):
+            sort_idx = np.argsort(distances[query_index])
+            predictions[query_index] = predictions[query_index, sort_idx]
+            _, unique_idx = np.unique(predictions[query_index], return_index=True)
+            predictions[query_index, :20] = predictions[query_index, np.sort(unique_idx)][:20]
+        predictions = predictions[:, :20]
+    elif test_method == "maj_voting":
         distances = np.reshape(distances, (eval_ds.queries_num, 5, 20))
         predictions = np.reshape(predictions, (eval_ds.queries_num, 5, 20))
-        for q in range(eval_ds.queries_num):
-            # votings, modify distances in-place
-            top_n_voting('top1', predictions[q], distances[q], args.majority_weight)
-            top_n_voting('top5', predictions[q], distances[q], args.majority_weight)
-            top_n_voting('top10', predictions[q], distances[q], args.majority_weight)
+        for query_index in range(eval_ds.queries_num):
+            top_n_voting("top1", predictions[query_index], distances[query_index], args.majority_weight)
+            top_n_voting("top5", predictions[query_index], distances[query_index], args.majority_weight)
+            top_n_voting("top10", predictions[query_index], distances[query_index], args.majority_weight)
+            flattened_distances = distances[query_index].flatten()
+            flattened_predictions = predictions[query_index].flatten()
+            sort_idx = np.argsort(flattened_distances)
+            flattened_predictions = flattened_predictions[sort_idx]
+            _, unique_idx = np.unique(flattened_predictions, return_index=True)
+            predictions[query_index, 0, :20] = flattened_predictions[np.sort(unique_idx)][:20]
+        predictions = predictions[:, 0, :20]
 
-            # flatten dist and preds from 5, 20 -> 20*5
-            # and then proceed as usual to keep only first 20
-            dists = distances[q].flatten()
-            preds = predictions[q].flatten()
+    return faiss_index, distances, predictions
 
-            # sort predictions by distance
-            sort_idx = np.argsort(dists)
-            preds = preds[sort_idx]
-            # remove duplicated predictions, i.e. keep only the closest ones
-            _, unique_idx = np.unique(preds, return_index=True)
-            # unique_idx is sorted based on the unique values, sort it again
-            # here the row corresponding to the first crop is used as a
-            # 'buffer' for each query, and in the end the dimension
-            # relative to crops is eliminated
-            predictions[q, 0, :20] = preds[np.sort(unique_idx)][:20]
-        predictions = predictions[:, 0, :20]  # keep only the closer 20 predictions for each query
 
-    #### For each query, check if the predictions are correct
+def _compute_recalls(args: Any, eval_ds: Any, predictions: np.ndarray) -> tuple[np.ndarray, str]:
     positives_per_query = eval_ds.get_positives()
-    # args.recall_values by default is [1, 5, 10, 20]
     recalls = np.zeros(len(args.recall_values))
     for query_index, pred in enumerate(predictions):
-        for i, n in enumerate(args.recall_values):
-            if np.any(np.in1d(pred[:n], positives_per_query[query_index])):
-                recalls[i:] += 1
+        for recall_index, recall_at in enumerate(args.recall_values):
+            if np.any(np.in1d(pred[:recall_at], positives_per_query[query_index])):
+                recalls[recall_index:] += 1
                 break
-    # Divide by the number of queries*100, so the recalls are in percentages
     recalls = recalls / eval_ds.queries_num * 100
     recalls_str = ", ".join([f"R@{val}: {rec:.1f}" for val, rec in zip(args.recall_values, recalls)])
+    return recalls, recalls_str
 
-    if retrieval_diagnostics_enabled:
-        if test_method in ["nearest_crop", "maj_voting"]:
-            logging.warning(
-                "Retrieval per-query diagnostics are not computed for test_method=%s because "
-                "query refinement changes ranking after FAISS search.",
-                test_method,
-            )
-            eval_ds.retrieval_query_diagnostics = []
-            eval_ds.retrieval_per_bin_metrics = []
-            eval_ds.retrieval_diagnostics_meta = {
-                "enabled": True,
-                "computed": False,
-                "metric_type": "l2_distance",
-                "margin_definition": "best_negative_distance - best_positive_distance",
-                "binning_strategy": "positive_set_size",
-                "reason": f"unsupported_test_method:{test_method}",
-            }
-        else:
-            logging.debug("Calculating retrieval per-query diagnostics")
-            diag_distances, diag_predictions = faiss_index.search(queries_features, eval_ds.database_num)
-            diagnostics = []
-            for query_index, (query_distances, query_predictions) in enumerate(zip(diag_distances, diag_predictions)):
-                positives = eval_ds.get_positives()[query_index]
-                positive_count = int(len(positives))
-                positive_mask = np.in1d(query_predictions, positives)
-                negative_mask = np.logical_not(positive_mask)
 
-                best_positive_rank = int(np.argmax(positive_mask)) + 1 if np.any(positive_mask) else None
-                best_positive_distance = float(query_distances[best_positive_rank - 1]) if best_positive_rank is not None else None
-                best_negative_rank = int(np.argmax(negative_mask)) + 1 if np.any(negative_mask) else None
-                best_negative_distance = float(query_distances[best_negative_rank - 1]) if best_negative_rank is not None else None
-                margin = None
-                if best_positive_distance is not None and best_negative_distance is not None:
-                    # L2 retrieval uses smaller distances as better matches, so larger margins are better.
-                    margin = best_negative_distance - best_positive_distance
+def _populate_retrieval_diagnostics(
+    args: Any,
+    eval_ds: Any,
+    faiss_index: faiss.IndexFlatL2,
+    query_features: np.ndarray,
+    test_method: str,
+    query_debug_rows: list[dict[str, Any]] | None,
+    cluster_mass_rows: list[dict[str, Any]] | None,
+) -> None:
+    retrieval_debug = getattr(args, "return_debug_metrics", False)
+    attack_config = adversarial.attack_config_from_args(args)
+    attack_metadata = adversarial.attack_config_to_dict(attack_config)
 
-                top1_prediction = int(query_predictions[0])
-                top1_correct = bool(positive_mask[0])
-                success_at_5 = bool(np.any(positive_mask[:5]))
-                success_at_10 = bool(np.any(positive_mask[:10]))
+    if test_method in ["nearest_crop", "maj_voting"]:
+        logging.warning(
+            "Retrieval per-query diagnostics are not computed for test_method=%s because query refinement changes ranking after FAISS search.",
+            test_method,
+        )
+        eval_ds.retrieval_query_diagnostics = []
+        eval_ds.retrieval_per_bin_metrics = []
+        eval_ds.retrieval_query_debug = query_debug_rows or []
+        eval_ds.retrieval_cluster_mass_stats = cluster_mass_rows or []
+        eval_ds.retrieval_diagnostics_meta = {
+            "enabled": True,
+            "computed": False,
+            "metric_type": "l2_distance",
+            "margin_definition": "best_negative_distance - best_positive_distance",
+            "binning_strategy": "positive_set_size",
+            "reason": f"unsupported_test_method:{test_method}",
+            "attack": attack_metadata,
+        }
+        return
 
-                diagnostics.append({
-                    "query_index": int(query_index),
-                    "positive_count": positive_count,
-                    "bin_label": _positive_count_bin_label(positive_count),
-                    "best_positive_distance": best_positive_distance,
-                    "best_negative_distance": best_negative_distance,
-                    "margin": float(margin) if margin is not None else None,
-                    "best_positive_rank": best_positive_rank,
-                    "top1_prediction": top1_prediction,
-                    "top1_correct": top1_correct,
-                    "success_at_5": success_at_5,
-                    "success_at_10": success_at_10,
-                })
+    logging.debug("Calculating retrieval per-query diagnostics")
+    diag_distances, diag_predictions = faiss_index.search(query_features, eval_ds.database_num)
+    diagnostics = []
+    positives_per_query = eval_ds.get_positives()
 
-            eval_ds.retrieval_query_diagnostics = diagnostics
-            eval_ds.retrieval_per_bin_metrics = _compute_retrieval_per_bin_metrics(diagnostics)
-            if retrieval_debug:
-                eval_ds.retrieval_query_debug = query_debug_rows
-                eval_ds.retrieval_cluster_mass_stats = cluster_mass_rows
-            eval_ds.retrieval_diagnostics_meta = {
-                "enabled": True,
-                "computed": True,
-                "metric_type": "l2_distance",
-                "margin_definition": "best_negative_distance - best_positive_distance",
-                "binning_strategy": "positive_set_size",
-                "stored_on": "eval_ds.retrieval_query_diagnostics",
-                "per_bin_stored_on": "eval_ds.retrieval_per_bin_metrics",
-                "debug_metrics": retrieval_debug,
-            }
+    for query_index, (query_distances, query_predictions) in enumerate(zip(diag_distances, diag_predictions)):
+        positives = positives_per_query[query_index]
+        positive_count = int(len(positives))
+        positive_mask = np.in1d(query_predictions, positives)
+        negative_mask = np.logical_not(positive_mask)
 
-    del database_features, all_features
+        best_positive_rank = int(np.argmax(positive_mask)) + 1 if np.any(positive_mask) else None
+        best_positive_distance = float(query_distances[best_positive_rank - 1]) if best_positive_rank is not None else None
+        best_negative_rank = int(np.argmax(negative_mask)) + 1 if np.any(negative_mask) else None
+        best_negative_distance = float(query_distances[best_negative_rank - 1]) if best_negative_rank is not None else None
+        margin = None
+        if best_positive_distance is not None and best_negative_distance is not None:
+            margin = best_negative_distance - best_positive_distance
+
+        diagnostics.append({
+            "query_index": int(query_index),
+            "positive_count": positive_count,
+            "bin_label": _positive_count_bin_label(positive_count),
+            "best_positive_distance": best_positive_distance,
+            "best_negative_distance": best_negative_distance,
+            "margin": float(margin) if margin is not None else None,
+            "best_positive_rank": best_positive_rank,
+            "top1_prediction": int(query_predictions[0]),
+            "top1_correct": bool(positive_mask[0]),
+            "success_at_5": bool(np.any(positive_mask[:5])),
+            "success_at_10": bool(np.any(positive_mask[:10])),
+        })
+
+    eval_ds.retrieval_query_diagnostics = diagnostics
+    eval_ds.retrieval_per_bin_metrics = _compute_retrieval_per_bin_metrics(diagnostics)
+    if retrieval_debug:
+        eval_ds.retrieval_query_debug = query_debug_rows or []
+        eval_ds.retrieval_cluster_mass_stats = cluster_mass_rows or []
+    eval_ds.retrieval_diagnostics_meta = {
+        "enabled": True,
+        "computed": True,
+        "metric_type": "l2_distance",
+        "margin_definition": "best_negative_distance - best_positive_distance",
+        "binning_strategy": "positive_set_size",
+        "stored_on": "eval_ds.retrieval_query_diagnostics",
+        "per_bin_stored_on": "eval_ds.retrieval_per_bin_metrics",
+        "debug_metrics": retrieval_debug,
+        "attack": attack_metadata,
+    }
+
+
+def test(args: Any, eval_ds: Any, model: torch.nn.Module, test_method: str = "hard_resize", pca: Any = None) -> tuple[np.ndarray, str]:
+    assert test_method in SUPPORTED_TEST_METHODS, f"test_method can't be {test_method}"
+    if args.efficient_ram_testing:
+        raise NotImplementedError("efficient_ram_testing is not implemented for the adversarial evaluation path")
+
+    attack_config = adversarial.attack_config_from_args(args)
+    if attack_config.attack_name in adversarial.WHITEBOX_ATTACKS and pca is not None:
+        raise ValueError("White-box attacks are not supported together with PCA evaluation")
+
+    _clear_retrieval_outputs(eval_ds)
+    eval_ds.retrieval_attack_metadata = adversarial.attack_config_to_dict(attack_config)
+
+    logging.debug("Extracting database features for evaluation/testing")
+    database_features = _extract_database_features(args, eval_ds, model, pca)
+
+    logging.debug("Extracting queries features for evaluation/testing")
+    query_features, query_debug_rows, cluster_mass_rows = _extract_query_features(
+        args=args,
+        eval_ds=eval_ds,
+        model=model,
+        test_method=test_method,
+        pca=pca,
+        database_features=database_features,
+        attack_config=attack_config,
+    )
+
+    logging.debug("Calculating recalls")
+    faiss_index, _, predictions = _search_predictions(
+        args=args,
+        eval_ds=eval_ds,
+        database_features=database_features,
+        query_features=query_features,
+        test_method=test_method,
+    )
+    recalls, recalls_str = _compute_recalls(args, eval_ds, predictions)
+
+    if getattr(args, "enable_retrieval_diagnostics", False):
+        _populate_retrieval_diagnostics(
+            args=args,
+            eval_ds=eval_ds,
+            faiss_index=faiss_index,
+            query_features=query_features,
+            test_method=test_method,
+            query_debug_rows=query_debug_rows,
+            cluster_mass_rows=cluster_mass_rows,
+        )
+
     return recalls, recalls_str

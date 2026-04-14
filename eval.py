@@ -32,6 +32,7 @@ from os.path import join
 from datetime import datetime
 from torch.utils.model_zoo import load_url
 
+import adversarial
 import test
 import util
 import commons
@@ -101,11 +102,13 @@ def export_retrieval_diagnostics_outputs(args, eval_ds, recalls, recalls_str):
         "recalls_str": recalls_str,
         "retrieval_diagnostics_enabled": True,
         "return_debug_metrics": args.return_debug_metrics,
+        "attack": getattr(eval_ds, "retrieval_attack_metadata", adversarial.attack_config_to_dict(adversarial.attack_config_from_args(args))),
         "token_keep_ratio": args.token_keep_ratio,
         "token_keep_ratios": args.token_keep_ratios,
         "masking_mode": args.masking_mode,
         "low_mass_threshold": args.low_mass_threshold,
         "token_dropout_seed": args.token_dropout_seed,
+        "feature_cache_dir": args.feature_cache_dir,
         "query_count": len(merged_per_query_rows),
         "per_bin_count": len(per_bin_rows),
         "cluster_mass_row_count": len(cluster_mass_rows),
@@ -121,13 +124,13 @@ def export_retrieval_diagnostics_outputs(args, eval_ds, recalls, recalls_str):
 
 ######################################### SETUP #########################################
 args = parser.parse_arguments()
+attack_config = adversarial.attack_config_from_args(args)
 start_time = datetime.now()
 args.save_dir = join("test", args.save_dir, start_time.strftime('%Y-%m-%d_%H-%M-%S'))
 commons.setup_logging(args.save_dir)
 commons.make_deterministic(args.seed)
-if args.enable_retrieval_diagnostics:
-    random.seed(args.token_dropout_seed)
-    np.random.seed(args.token_dropout_seed)
+random.seed(args.seed + attack_config.attack_seed)
+np.random.seed(args.seed + attack_config.attack_seed)
 logging.info(f"Arguments: {args}")
 logging.info(f"The outputs are being saved in {args.save_dir}")
 

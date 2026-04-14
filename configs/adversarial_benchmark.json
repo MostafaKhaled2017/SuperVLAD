@@ -1,0 +1,64 @@
+{
+  "eval": {
+    "eval_datasets_folder": "datasets",
+    "eval_dataset_name": "nordland",
+    "resume": "checkpoints/SuperVLAD.pth",
+    "backbone": "dino",
+    "supervlad_clusters": 4,
+    "crossimage_encoder": true,
+    "infer_batch_size": 8,
+    "device": "cuda",
+    "num_workers": 8,
+    "test_method": "hard_resize"
+  },
+  "attacks": {
+    "corruptions": {
+      "gaussian_noise": {
+        "attack_severities": [1, 2, 3],
+        "attack_seeds": [0]
+      },
+      "gaussian_blur": {
+        "attack_severities": [1, 2, 3],
+        "attack_seeds": [0]
+      },
+      "jpeg_compression": {
+        "attack_severities": [1, 2, 3],
+        "attack_seeds": [0]
+      },
+      "brightness_contrast_shift": {
+        "attack_severities": [1, 2, 3],
+        "attack_seeds": [0]
+      },
+      "patch_occlusion": {
+        "attack_severities": [1, 2, 3],
+        "attack_seeds": [0]
+      }
+    },
+    "white_box": {
+      "fgsm_linf": {
+        "attack_eps": [0.00784313725490196, 0.01568627450980392, 0.03137254901960784],
+        "attack_seeds": [0]
+      },
+      "pgd_linf": {
+        "attack_eps": [0.00784313725490196, 0.01568627450980392, 0.03137254901960784],
+        "attack_steps": 10,
+        "attack_step_size": null,
+        "attack_seeds": [0]
+      }
+    },
+    "token_mask": {
+      "random": {
+        "attack_keep_ratios": [0.75, 0.5, 0.25],
+        "attack_seeds": [0, 1, 2]
+      },
+      "center": {
+        "attack_keep_ratios": [0.75, 0.5, 0.25],
+        "attack_seeds": [0]
+      },
+      "block": {
+        "attack_keep_ratios": [0.75, 0.5, 0.25],
+        "attack_seeds": [0, 1, 2]
+      }
+    }
+  }
+}

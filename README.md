@@ -37,6 +37,137 @@ python3 train.py --eval_datasets_folder=/path/to/your/datasets_vg/datasets --eva
 python3 eval.py --eval_datasets_folder=/path/to/your/datasets_vg/datasets --eval_dataset_name=msls --resume=/path/to/trained/model/SuperVLAD.pth --backbone=dino --supervlad_clusters=4 --crossimage_encoder --infer_batch_size=8
 ```
 
+## Adversarial Evaluation
+
+The evaluation pipeline supports query-side robustness testing with:
+
+- Image corruptions: `gaussian_noise`, `gaussian_blur`, `jpeg_compression`, `brightness_contrast_shift`, `patch_occlusion`
+- White-box attacks: `fgsm_linf`, `pgd_linf`
+- Token masking attacks: `token_mask` with `random`, `center`, or `block`
+
+Attack runs currently support `--test_method=hard_resize`.
+
+Example single attack run:
+
+```
+python3 eval.py \
+  --eval_datasets_folder=/path/to/your/datasets_vg/datasets \
+  --eval_dataset_name=msls \
+  --resume=/path/to/trained/model/SuperVLAD.pth \
+  --backbone=dino \
+  --supervlad_clusters=4 \
+  --crossimage_encoder \
+  --infer_batch_size=8 \
+  --enable_retrieval_diagnostics \
+  --return_debug_metrics \
+  --attack_name=pgd_linf \
+  --attack_eps=0.03137254901960784 \
+  --attack_steps=10 \
+  --attack_seed=0
+```
+
+Token masking example:
+
+```
+python3 eval.py \
+  --eval_datasets_folder=/path/to/your/datasets_vg/datasets \
+  --eval_dataset_name=msls \
+  --resume=/path/to/trained/model/SuperVLAD.pth \
+  --backbone=dino \
+  --supervlad_clusters=4 \
+  --crossimage_encoder \
+  --infer_batch_size=8 \
+  --enable_retrieval_diagnostics \
+  --return_debug_metrics \
+  --attack_name=token_mask \
+  --attack_mask_mode=block \
+  --attack_keep_ratio=0.5 \
+  --attack_seed=0
+```
+
+## Robustness Benchmark
+
+Use `robustness_benchmark.py` to run a full clean-vs-attacked benchmark from a JSON manifest. The default manifest is provided at `configs/adversarial_benchmark.json`.
+
+```
+python3 robustness_benchmark.py --manifest configs/adversarial_benchmark.json --output-root results
+```
+
+The benchmark writes:
+
+- per-run `metrics.json`, `per_query.csv`, `per_bin.csv`, and `cluster_mass_stats.csv`
+- per-attack `paired_metrics.json` and `query_pair_deltas.csv`
+- benchmark-level `attack_summary.csv`, `attack_summary.json`, `query_pair_deltas.csv`, and `robustness_summary.json`
+
+When `--feature_cache_dir` is provided, clean database descriptors are cached and reused across attack runs.
+
+## Multi-Dataset Attack Runner
+
+Use `run_adverserial_attacks.sh` to launch the first split of the adversarial benchmark. By default it runs both `nordland` and `sped` and then aggregates the outputs into a single comparison directory.
+
+```
+bash run_adverserial_attacks.sh
+```
+
+To run only one dataset, pass it as an argument:
+
+```
+bash run_adverserial_attacks.sh sped
+```
+
+This first script runs experiment indices `01` through `20`.
+
+Use `run_adverserial_attacks_part2.sh` to continue the same benchmark run with experiment indices `21+`. It follows the same dataset selection behavior.
+
+```
+bash run_adverserial_attacks_part2.sh
+```
+
+For example:
+
+```
+bash run_adverserial_attacks_part2.sh sped
+```
+
+If you launch the second script later and want to target a specific split run, pass the same `RUN_STAMP` to both scripts:
+
+```
+RUN_STAMP=2026-04-13_12-00-00 bash run_adverserial_attacks.sh
+RUN_STAMP=2026-04-13_12-00-00 bash run_adverserial_attacks_part2.sh
+```
+
+If `RUN_STAMP` is omitted for the second script, it appends to the latest available run under each dataset.
+
+Useful environment variables:
+
+- `EVAL_DATASETS_FOLDER`
+- `NORDLAND_CHECKPOINT`
+- `SPED_CHECKPOINT`
+- `RESULTS_ROOT`
+- `DEVICE`
+- `USE_CROSSIMAGE_ENCODER`
+
+The script writes:
+
+- one benchmark run under `results/nordland/<timestamp>`
+- one benchmark run under `results/sped/<timestamp>`
+- one comparison bundle under `results/comparisons/<timestamp>`
+
+The comparison bundle includes:
+
+- `dataset_overview.csv` for clean baseline and worst-case robustness per dataset
+- `dataset_attack_summary.csv` for all attack rows across both datasets
+- `cross_dataset_comparison.csv` for side-by-side attack metrics across datasets
+- `comparison_summary.json` with the source run roots and output metadata
+
+You can also compare benchmark runs later without rerunning attacks:
+
+```
+python3 compare_benchmark_results.py \
+  --results-root results \
+  --datasets nordland sped
+```
+
 ## SuperVLAD without cross-image encoder
 
 Remove parameter `--crossimage_encoder` to run the SuperVLAD without cross-image encoder.

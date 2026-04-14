@@ -3,6 +3,8 @@ import os
 import torch
 import argparse
 
+import adversarial
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Benchmarking Visual Geolocalization",
@@ -84,7 +86,7 @@ def parse_arguments():
     parser.add_argument("--token_keep_ratios", type=float, default=None, nargs="+",
                         help="Optional list of token keep ratios for future eval sweeps.")
     parser.add_argument("--masking_mode", type=str, default="none",
-                        choices=["none", "random"],
+                        choices=["none", "random", "center", "block"],
                         help="Optional masking mode for eval-time token filtering.")
     parser.add_argument("--low_mass_threshold", type=float, default=1e-3,
                         help="Threshold used for low-mass cluster statistics.")
@@ -92,6 +94,26 @@ def parse_arguments():
                         help="Seed used by eval-time token masking logic.")
     parser.add_argument("--retrieval_diagnostics_output_dir", type=str, default=None,
                         help="Optional subdirectory inside the eval run directory for retrieval diagnostics exports.")
+    parser.add_argument("--attack_name", type=str, default="none",
+                        choices=sorted(adversarial.SUPPORTED_ATTACKS),
+                        help="Optional adversarial or corruption attack applied to query images during evaluation.")
+    parser.add_argument("--attack_severity", type=int, default=None,
+                        help="Severity level for corruption attacks. Supported values are 1, 2, and 3.")
+    parser.add_argument("--attack_seed", type=int, default=0,
+                        help="Seed used for deterministic attack variants.")
+    parser.add_argument("--attack_eps", type=float, default=None,
+                        help="L_inf radius in pixel space for white-box attacks.")
+    parser.add_argument("--attack_steps", type=int, default=None,
+                        help="Number of optimization steps for iterative white-box attacks.")
+    parser.add_argument("--attack_step_size", type=float, default=None,
+                        help="Per-step L_inf update size in pixel space for iterative white-box attacks.")
+    parser.add_argument("--attack_mask_mode", type=str, default="none",
+                        choices=sorted(adversarial.SUPPORTED_MASK_MODES),
+                        help="Masking mode used when attack_name=token_mask.")
+    parser.add_argument("--attack_keep_ratio", type=float, default=None,
+                        help="Token keep ratio used when attack_name=token_mask.")
+    parser.add_argument("--feature_cache_dir", type=str, default=None,
+                        help="Optional directory for cached clean database descriptors during evaluation.")
     # Data augmentation parameters
     parser.add_argument("--brightness", type=float, default=None, help="_")
     parser.add_argument("--contrast", type=float, default=None, help="_")
@@ -135,5 +157,7 @@ def parse_arguments():
     
     if args.pca_dim != None and args.pca_dataset_folder == None:
         raise ValueError("Please specify --pca_dataset_folder when using pca")
+
+    adversarial.validate_attack_arguments(args)
     
     return args
