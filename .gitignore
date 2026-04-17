@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+
+checkpoints/
+datasets
+logs/
+results/
+test/
+venv/
+
+reports/
+
