@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import logging
 import math
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -27,6 +29,7 @@ SUPPORTED_ATTACKS = {
 }
 SUPPORTED_MASK_MODES = {"none", "random", "center", "block"}
 WHITEBOX_ATTACKS = {"fgsm_linf", "pgd_linf"}
+TRAINING_ATTACKS = {"fgsm_linf", "pgd_linf"}
 CORRUPTION_ATTACKS = {
     "gaussian_noise",
     "gaussian_blur",
@@ -64,6 +67,20 @@ class AttackConfig:
     @property
     def enabled(self) -> bool:
         return self.attack_name != "none"
+
+
+@dataclass(frozen=True)
+class AdvTrainConfig:
+    enabled: bool = False
+    attack_name: str = "fgsm_linf"
+    eps: float | None = None
+    steps: int = 10
+    step_size: float | None = None
+    weight: float = 1.0
+    clean_weight: float = 1.0
+    query_index: int = 0
+    random_start: bool = False
+    log_interval: int = 50
 
 
 def _to_device_tensor(value: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
@@ -141,6 +158,58 @@ def attack_config_from_args(args: Any) -> AttackConfig:
         attack_mask_mode=attack_mask_mode,
         attack_keep_ratio=attack_keep_ratio,
     )
+
+
+def adv_train_config_from_args(args: Any) -> AdvTrainConfig:
+    return AdvTrainConfig(
+        enabled=getattr(args, "adv_train", False),
+        attack_name=getattr(args, "adv_train_attack", "fgsm_linf"),
+        eps=getattr(args, "adv_train_eps", None),
+        steps=getattr(args, "adv_train_steps", 10),
+        step_size=getattr(args, "adv_train_step_size", None),
+        weight=getattr(args, "adv_train_weight", 1.0),
+        clean_weight=getattr(args, "adv_train_clean_weight", 1.0),
+        query_index=getattr(args, "adv_train_query_index", 0),
+        random_start=getattr(args, "adv_train_random_start", False),
+        log_interval=getattr(args, "adv_train_log_interval", 50),
+    )
+
+
+def eval_attack_config_from_adv_train(args: Any, config: AdvTrainConfig) -> AttackConfig:
+    if not config.enabled:
+        return AttackConfig()
+    if config.attack_name not in WHITEBOX_ATTACKS:
+        raise ValueError(
+            f"Adversarial training attack {config.attack_name} does not support matched eval conversion"
+        )
+
+    attack_steps = 1 if config.attack_name == "fgsm_linf" else int(config.steps)
+    attack_seed = getattr(args, "attack_seed", None)
+    if attack_seed is None:
+        attack_seed = getattr(args, "seed", 0)
+
+    return AttackConfig(
+        attack_name=config.attack_name,
+        attack_seed=int(attack_seed),
+        attack_eps=float(config.eps) if config.eps is not None else None,
+        attack_steps=attack_steps,
+        attack_step_size=float(config.step_size) if config.step_size is not None else None,
+    )
+
+
+def copy_args_with_attack_config(args: Any, config: AttackConfig) -> Any:
+    updated_args = copy.copy(args)
+    updated_args.attack_name = config.attack_name
+    updated_args.attack_severity = config.attack_severity
+    updated_args.attack_seed = config.attack_seed
+    updated_args.attack_eps = config.attack_eps
+    updated_args.attack_steps = config.attack_steps
+    updated_args.attack_step_size = config.attack_step_size
+    updated_args.attack_mask_mode = config.attack_mask_mode
+    updated_args.attack_keep_ratio = config.attack_keep_ratio
+    updated_args.token_keep_ratio = config.token_keep_ratio
+    updated_args.masking_mode = config.masking_mode
+    return updated_args
 
 
 def validate_attack_arguments(args: Any) -> None:
@@ -303,15 +372,19 @@ def compute_reference_pairs(
     positives_per_query: list[np.ndarray],
     query_indices: list[int],
 ) -> dict[str, np.ndarray]:
-    positive_indices = np.empty(len(query_indices), dtype=np.int64)
-    negative_indices = np.empty(len(query_indices), dtype=np.int64)
+    positive_indices = np.zeros(len(query_indices), dtype=np.int64)
+    negative_indices = np.zeros(len(query_indices), dtype=np.int64)
+    valid_mask = np.ones(len(query_indices), dtype=bool)
+    skipped_query_indices: list[int] = []
 
     for row_idx, query_index in enumerate(query_indices):
         query_feature = clean_query_features[row_idx]
         distances = np.sum((database_features - query_feature[None, :]) ** 2, axis=1)
         positives = np.asarray(positives_per_query[query_index], dtype=np.int64)
         if positives.size == 0:
-            raise ValueError(f"Query {query_index} has no positives and cannot be used for white-box attacks")
+            valid_mask[row_idx] = False
+            skipped_query_indices.append(int(query_index))
+            continue
         best_positive_offset = int(np.argmin(distances[positives]))
         positive_indices[row_idx] = int(positives[best_positive_offset])
 
@@ -326,6 +399,8 @@ def compute_reference_pairs(
     return {
         "positive_indices": positive_indices,
         "negative_indices": negative_indices,
+        "valid_mask": valid_mask,
+        "skipped_query_indices": np.asarray(skipped_query_indices, dtype=np.int64),
     }
 
 
@@ -342,6 +417,66 @@ def _whitebox_loss(
     return (positive_distance - negative_distance).mean()
 
 
+def descriptor_attack_loss(
+    query_descriptors: torch.Tensor,
+    positive_descriptors: torch.Tensor,
+    negative_descriptors: torch.Tensor,
+) -> torch.Tensor:
+    positive_distance = torch.sum((query_descriptors - positive_descriptors) ** 2, dim=1)
+    negative_distance = torch.sum((query_descriptors - negative_descriptors) ** 2, dim=1)
+    return (positive_distance - negative_distance).mean()
+
+
+def select_training_query_indices(batch_size: int, images_per_place: int, query_index: int) -> torch.Tensor:
+    if images_per_place <= 0:
+        raise ValueError("images_per_place must be > 0")
+    if query_index < 0 or query_index >= images_per_place:
+        raise ValueError(f"query_index must be in [0, {images_per_place - 1}]")
+    return torch.arange(query_index, batch_size * images_per_place, images_per_place, dtype=torch.long)
+
+
+def build_training_descriptor_targets(
+    clean_descriptors: torch.Tensor,
+    labels: torch.Tensor,
+    query_indices: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    valid_query_indices = []
+    positive_targets = []
+    negative_targets = []
+
+    for query_index in query_indices.tolist():
+        query_descriptor = clean_descriptors[query_index]
+        same_label = torch.nonzero(labels == labels[query_index], as_tuple=False).flatten()
+        same_label = same_label[same_label != query_index]
+        if same_label.numel() == 0:
+            continue
+
+        different_label = torch.nonzero(labels != labels[query_index], as_tuple=False).flatten()
+        if different_label.numel() == 0:
+            continue
+
+        positive_distances = torch.sum((clean_descriptors.index_select(0, same_label) - query_descriptor) ** 2, dim=1)
+        negative_distances = torch.sum((clean_descriptors.index_select(0, different_label) - query_descriptor) ** 2, dim=1)
+
+        hardest_positive = same_label[int(torch.argmax(positive_distances).item())]
+        hardest_negative = different_label[int(torch.argmin(negative_distances).item())]
+
+        valid_query_indices.append(query_index)
+        positive_targets.append(clean_descriptors[hardest_positive].detach())
+        negative_targets.append(clean_descriptors[hardest_negative].detach())
+
+    if not valid_query_indices:
+        empty_indices = torch.empty((0,), dtype=torch.long, device=labels.device)
+        empty_descriptors = clean_descriptors.new_empty((0, clean_descriptors.shape[1]))
+        return empty_indices, empty_descriptors, empty_descriptors
+
+    return (
+        torch.tensor(valid_query_indices, dtype=torch.long, device=labels.device),
+        torch.stack(positive_targets, dim=0),
+        torch.stack(negative_targets, dim=0),
+    )
+
+
 def _make_random_start(original: torch.Tensor, pixel_radius: float, sample_ids: list[int], base_seed: int) -> torch.Tensor:
     eps = normalized_linf_radius(pixel_radius, original)
     perturbed = original.clone()
@@ -356,6 +491,50 @@ def _make_random_start(original: torch.Tensor, pixel_radius: float, sample_ids: 
     return _clamp_linf_normalized(perturbed, original, pixel_radius)
 
 
+def _train_attack_step_size(config: AdvTrainConfig) -> float:
+    if config.step_size is not None:
+        return float(config.step_size)
+    if config.attack_name == "pgd_linf":
+        return float(config.eps) / 4.0
+    return float(config.eps)
+
+
+def generate_training_adversarial_queries(
+    inputs: torch.Tensor,
+    sample_ids: list[int],
+    config: AdvTrainConfig,
+    model: torch.nn.Module,
+    positive_descriptors: torch.Tensor,
+    negative_descriptors: torch.Tensor,
+) -> torch.Tensor:
+    if not config.enabled:
+        return inputs.detach()
+    if config.attack_name not in TRAINING_ATTACKS:
+        raise ValueError(f"Unsupported adversarial training attack: {config.attack_name}")
+    if inputs.shape[0] == 0:
+        return inputs.detach()
+
+    pixel_radius = float(config.eps)
+    attack_steps = 1 if config.attack_name == "fgsm_linf" else int(config.steps)
+    step_size = _train_attack_step_size(config)
+    step_size_normalized = normalized_linf_radius(step_size, inputs)
+
+    original = inputs.detach()
+    adv = original.clone()
+    if config.attack_name == "pgd_linf" and config.random_start:
+        adv = _make_random_start(original, pixel_radius, sample_ids, 0)
+
+    for _ in range(attack_steps):
+        adv = adv.detach().requires_grad_(True)
+        descriptors = model(adv, queryflag=0)
+        loss = descriptor_attack_loss(descriptors, positive_descriptors, negative_descriptors)
+        gradient = torch.autograd.grad(loss, adv, retain_graph=False, create_graph=False)[0]
+        adv = adv + step_size_normalized * gradient.sign()
+        adv = _clamp_linf_normalized(adv.detach(), original, pixel_radius)
+
+    return adv.detach()
+
+
 def apply_whitebox_attack(
     inputs: torch.Tensor,
     sample_ids: list[int],
@@ -367,6 +546,16 @@ def apply_whitebox_attack(
     pixel_radius = float(config.attack_eps)
     attack_steps = 1 if config.attack_name == "fgsm_linf" else int(config.attack_steps or 10)
     step_size = float(config.attack_step_size) if config.attack_step_size is not None else pixel_radius / 4.0
+
+    valid_mask_value = reference_pairs.get("valid_mask")
+    if valid_mask_value is None:
+        valid_mask = torch.ones(inputs.shape[0], device=inputs.device, dtype=torch.bool)
+    else:
+        valid_mask = torch.as_tensor(valid_mask_value, device=inputs.device, dtype=torch.bool)
+    if valid_mask.numel() != inputs.shape[0]:
+        raise ValueError("reference_pairs valid_mask must match the batch size for white-box attacks")
+    if not torch.any(valid_mask):
+        return inputs.detach()
 
     positive_indices = torch.as_tensor(reference_pairs["positive_indices"], device=inputs.device, dtype=torch.long)
     negative_indices = torch.as_tensor(reference_pairs["negative_indices"], device=inputs.device, dtype=torch.long)
@@ -381,9 +570,15 @@ def apply_whitebox_attack(
     for _ in range(attack_steps):
         adv = adv.detach().requires_grad_(True)
         descriptors = model(adv, queryflag=0)
-        loss = _whitebox_loss(descriptors, database_descriptors, positive_indices, negative_indices)
+        loss = _whitebox_loss(
+            descriptors[valid_mask],
+            database_descriptors,
+            positive_indices[valid_mask],
+            negative_indices[valid_mask],
+        )
         loss.backward()
         gradient_sign = adv.grad.sign()
+        gradient_sign = gradient_sign * valid_mask.view(-1, 1, 1, 1)
         adv = adv + step_size_normalized * gradient_sign
         adv = _clamp_linf_normalized(adv.detach(), original, pixel_radius)
 

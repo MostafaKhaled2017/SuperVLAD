@@ -25,6 +25,8 @@ SUPPORTED_TEST_METHODS = [
     "maj_voting",
 ]
 
+RETRIEVAL_DIAGNOSTICS_MAX_BUFFER_BYTES = 64 * 1024 * 1024
+
 
 def top_n_voting(topn: str, predictions: np.ndarray, distances: np.ndarray, majority_weight: float) -> None:
     if topn == "top1":
@@ -291,6 +293,13 @@ def _extract_query_features(
                 positives_per_query=eval_ds.get_positives(),
                 query_indices=query_indices,
             )
+            skipped_query_indices = reference_pairs.get("skipped_query_indices")
+            if skipped_query_indices is not None and len(skipped_query_indices) > 0:
+                logging.warning(
+                    "Skipping white-box attack for %d queries in this batch because they have no positives: %s",
+                    len(skipped_query_indices),
+                    skipped_query_indices.tolist(),
+                )
             attack_inputs = adversarial.apply_query_attack(
                 attack_inputs,
                 query_indices,
@@ -397,7 +406,7 @@ def _compute_recalls(args: Any, eval_ds: Any, predictions: np.ndarray) -> tuple[
     recalls = np.zeros(len(args.recall_values))
     for query_index, pred in enumerate(predictions):
         for recall_index, recall_at in enumerate(args.recall_values):
-            if np.any(np.in1d(pred[:recall_at], positives_per_query[query_index])):
+            if np.any(np.isin(pred[:recall_at], positives_per_query[query_index])):
                 recalls[recall_index:] += 1
                 break
     recalls = recalls / eval_ds.queries_num * 100
@@ -438,38 +447,51 @@ def _populate_retrieval_diagnostics(
         }
         return
 
-    logging.debug("Calculating retrieval per-query diagnostics")
-    diag_distances, diag_predictions = faiss_index.search(query_features, eval_ds.database_num)
     diagnostics = []
     positives_per_query = eval_ds.get_positives()
+    bytes_per_query = max(eval_ds.database_num * np.dtype(np.float32).itemsize * 2, 1)
+    diag_batch_size = max(1, RETRIEVAL_DIAGNOSTICS_MAX_BUFFER_BYTES // bytes_per_query)
+    logging.debug(
+        "Calculating retrieval per-query diagnostics in batches of %d queries for database size %d",
+        diag_batch_size,
+        eval_ds.database_num,
+    )
 
-    for query_index, (query_distances, query_predictions) in enumerate(zip(diag_distances, diag_predictions)):
-        positives = positives_per_query[query_index]
-        positive_count = int(len(positives))
-        positive_mask = np.in1d(query_predictions, positives)
-        negative_mask = np.logical_not(positive_mask)
+    for batch_start in range(0, len(query_features), diag_batch_size):
+        batch_end = min(batch_start + diag_batch_size, len(query_features))
+        batch_distances, batch_predictions = faiss_index.search(
+            query_features[batch_start:batch_end],
+            eval_ds.database_num,
+        )
 
-        best_positive_rank = int(np.argmax(positive_mask)) + 1 if np.any(positive_mask) else None
-        best_positive_distance = float(query_distances[best_positive_rank - 1]) if best_positive_rank is not None else None
-        best_negative_rank = int(np.argmax(negative_mask)) + 1 if np.any(negative_mask) else None
-        best_negative_distance = float(query_distances[best_negative_rank - 1]) if best_negative_rank is not None else None
-        margin = None
-        if best_positive_distance is not None and best_negative_distance is not None:
-            margin = best_negative_distance - best_positive_distance
+        for batch_offset, (query_distances, query_predictions) in enumerate(zip(batch_distances, batch_predictions)):
+            query_index = batch_start + batch_offset
+            positives = positives_per_query[query_index]
+            positive_count = int(len(positives))
+            positive_mask = np.isin(query_predictions, positives)
+            negative_mask = np.logical_not(positive_mask)
 
-        diagnostics.append({
-            "query_index": int(query_index),
-            "positive_count": positive_count,
-            "bin_label": _positive_count_bin_label(positive_count),
-            "best_positive_distance": best_positive_distance,
-            "best_negative_distance": best_negative_distance,
-            "margin": float(margin) if margin is not None else None,
-            "best_positive_rank": best_positive_rank,
-            "top1_prediction": int(query_predictions[0]),
-            "top1_correct": bool(positive_mask[0]),
-            "success_at_5": bool(np.any(positive_mask[:5])),
-            "success_at_10": bool(np.any(positive_mask[:10])),
-        })
+            best_positive_rank = int(np.argmax(positive_mask)) + 1 if np.any(positive_mask) else None
+            best_positive_distance = float(query_distances[best_positive_rank - 1]) if best_positive_rank is not None else None
+            best_negative_rank = int(np.argmax(negative_mask)) + 1 if np.any(negative_mask) else None
+            best_negative_distance = float(query_distances[best_negative_rank - 1]) if best_negative_rank is not None else None
+            margin = None
+            if best_positive_distance is not None and best_negative_distance is not None:
+                margin = best_negative_distance - best_positive_distance
+
+            diagnostics.append({
+                "query_index": int(query_index),
+                "positive_count": positive_count,
+                "bin_label": _positive_count_bin_label(positive_count),
+                "best_positive_distance": best_positive_distance,
+                "best_negative_distance": best_negative_distance,
+                "margin": float(margin) if margin is not None else None,
+                "best_positive_rank": best_positive_rank,
+                "top1_prediction": int(query_predictions[0]),
+                "top1_correct": bool(positive_mask[0]),
+                "success_at_5": bool(np.any(positive_mask[:5])),
+                "success_at_10": bool(np.any(positive_mask[:10])),
+            })
 
     eval_ds.retrieval_query_diagnostics = diagnostics
     eval_ds.retrieval_per_bin_metrics = _compute_retrieval_per_bin_metrics(diagnostics)

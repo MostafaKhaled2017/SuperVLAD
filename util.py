@@ -10,6 +10,38 @@ from sklearn.decomposition import PCA
 
 import datasets_ws
 
+
+def recall_score(recalls):
+    recalls_array = np.asarray(recalls, dtype=np.float32)
+    if recalls_array.size == 0:
+        return 0.0
+    if recalls_array.size == 1:
+        return float(recalls_array[0])
+    return float(recalls_array[0] + recalls_array[1])
+
+
+def resolve_validation_state(clean_recalls, adv_recalls, adv_train_enabled):
+    clean_recalls_array = np.asarray(clean_recalls, dtype=np.float32)
+    adv_recalls_array = None if adv_recalls is None else np.asarray(adv_recalls, dtype=np.float32)
+
+    if adv_train_enabled:
+        if adv_recalls_array is None:
+            raise ValueError("adv_recalls must be provided when adv_train_enabled is True")
+        selected_metric_name = "val_adv_r1_r5"
+        selected_recalls = adv_recalls_array
+    else:
+        selected_metric_name = "val_clean_r1_r5"
+        selected_recalls = clean_recalls_array
+
+    return {
+        "clean_recalls": clean_recalls_array,
+        "adv_recalls": adv_recalls_array,
+        "selected_metric_name": selected_metric_name,
+        "selected_recalls": selected_recalls,
+        "selected_score": recall_score(selected_recalls),
+    }
+
+
 def save_checkpoint(args, state, is_best, filename):
     model_path = join(args.save_dir, filename)
     torch.save(state, model_path)
@@ -41,13 +73,14 @@ def resume_train(args, model, optimizer=None, strict=False):
     model.load_state_dict(checkpoint["model_state_dict"], strict=strict)
     if optimizer:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    best_r5 = checkpoint["best_r5"]
+    best_r5 = checkpoint.get("best_metric_score", checkpoint["best_r5"])
     not_improved_num = checkpoint["not_improved_num"]
+    best_metric_name = checkpoint.get("best_metric_name", "val_clean_r1_r5")
     logging.debug(f"Loaded checkpoint: start_epoch_num = {start_epoch_num}, "
                   f"current_best_R@5 = {best_r5:.1f}")
     if args.resume.endswith("last_model.pth"):  # Copy best model to current save_dir
         shutil.copy(args.resume.replace("last_model.pth", "best_model.pth"), args.save_dir)
-    return model, optimizer, best_r5, start_epoch_num, not_improved_num
+    return model, optimizer, best_r5, start_epoch_num, not_improved_num, best_metric_name
 
 
 def compute_pca(args, model, pca_dataset_folder, full_features_dim):

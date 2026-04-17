@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -168,14 +169,49 @@ def write_command(exp_dir: Path, command: list[str]) -> None:
     (exp_dir / "command.txt").write_text(subprocess.list2cmdline(command))
 
 
+def _print_status(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+def _format_attack_summary(attack_options: dict[str, Any]) -> str:
+    parts = [f"name={attack_options['attack_name']}"]
+    if attack_options.get("attack_severity") is not None:
+        parts.append(f"severity={attack_options['attack_severity']}")
+    if attack_options.get("attack_eps") is not None:
+        parts.append(f"eps={attack_options['attack_eps']}")
+    if attack_options.get("attack_steps") is not None:
+        parts.append(f"steps={attack_options['attack_steps']}")
+    if attack_options.get("attack_keep_ratio") is not None:
+        parts.append(f"keep_ratio={attack_options['attack_keep_ratio']}")
+    if attack_options.get("attack_mask_mode") not in (None, "none"):
+        parts.append(f"mask_mode={attack_options['attack_mask_mode']}")
+    if attack_options.get("attack_seed") is not None:
+        parts.append(f"seed={attack_options['attack_seed']}")
+    return ", ".join(parts)
+
+
 def run_command(exp_dir: Path, command: list[str]) -> None:
     write_command(exp_dir, command)
     log_path = exp_dir / "run.log"
     with log_path.open("w") as log_file:
         log_file.write(f"[command] {subprocess.list2cmdline(command)}\n")
         log_file.flush()
-        process = subprocess.run(command, stdout=log_file, stderr=subprocess.STDOUT, text=True, check=False)
-    if process.returncode != 0:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            log_file.write(line)
+            log_file.flush()
+            sys.stderr.write(line)
+            sys.stderr.flush()
+        process.stdout.close()
+        return_code = process.wait()
+    if return_code != 0:
         raise RuntimeError(f"Command failed for {exp_dir.name}: {subprocess.list2cmdline(command)}")
 
 
@@ -227,6 +263,8 @@ def _in_selected_range(index: int, start_index: int, end_index: int | None) -> b
 
 
 def run_eval_experiment(
+    experiment_index: int,
+    total_experiments: int,
     exp_dir: Path,
     save_dir_key: str,
     eval_options: dict[str, Any],
@@ -237,8 +275,16 @@ def run_eval_experiment(
     skip_completed: bool,
 ) -> None:
     if skip_completed and metrics_complete(exp_dir):
+        _print_status(
+            f"[{experiment_index}/{total_experiments}] Skipping {exp_dir.name} "
+            f"({_format_attack_summary(attack_options)})"
+        )
         return
 
+    _print_status(
+        f"[{experiment_index}/{total_experiments}] Starting {exp_dir.name} "
+        f"({_format_attack_summary(attack_options)})"
+    )
     command = [
         python_bin,
         str(eval_script),
@@ -253,6 +299,7 @@ def run_eval_experiment(
     ]
     run_command(exp_dir, command)
     collect_eval_outputs(exp_dir, save_dir_key, retrieval_output_dir)
+    _print_status(f"[{experiment_index}/{total_experiments}] Finished {exp_dir.name}")
 
 
 def read_metrics(path: Path) -> dict[str, Any]:
@@ -477,11 +524,21 @@ def main() -> None:
     temp_prefix = Path("tmp_eval_runs") / dataset_name / run_root.name
     eval_options["feature_cache_dir"] = str(feature_cache_dir)
 
+    attacks = flatten_attacks(manifest)
+    selected_indices = [
+        index for index in range(1, len(attacks) + 2)
+        if _in_selected_range(index, args.exp_start_index, args.exp_end_index)
+    ]
+    total_experiments = len(selected_indices)
+
     baseline_attack = {"attack_name": "none", "attack_seed": 0}
     baseline_dir = run_root / "01_clean_baseline"
     baseline_save_dir = str(temp_prefix / "01_clean_baseline")
     if _in_selected_range(1, args.exp_start_index, args.exp_end_index):
+        selected_position = selected_indices.index(1) + 1
         run_eval_experiment(
+            experiment_index=selected_position,
+            total_experiments=total_experiments,
             exp_dir=baseline_dir,
             save_dir_key=baseline_save_dir,
             eval_options=eval_options,
@@ -496,14 +553,16 @@ def main() -> None:
             f"Baseline experiment 01 is missing under {baseline_dir}. Run a range that includes 01 first."
         )
 
-    attacks = flatten_attacks(manifest)
     for attack_index, attack in enumerate(attacks, start=2):
         if not _in_selected_range(attack_index, args.exp_start_index, args.exp_end_index):
             continue
+        selected_position = selected_indices.index(attack_index) + 1
         exp_name = experiment_dir_name(f"{attack_index:02d}", attack)
         exp_dir = run_root / exp_name
         save_dir_key = str(temp_prefix / exp_name)
         run_eval_experiment(
+            experiment_index=selected_position,
+            total_experiments=total_experiments,
             exp_dir=exp_dir,
             save_dir_key=save_dir_key,
             eval_options=eval_options,

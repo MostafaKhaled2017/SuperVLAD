@@ -6,4 +6,7 @@ __pycache__
 Notes.md
 results
 
+reports
+logs
+
 *.pth

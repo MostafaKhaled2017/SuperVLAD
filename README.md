@@ -27,10 +27,111 @@ The test dataset should be organized in a directory tree as such:
 
 Before training, you should download the pre-trained foundation model DINOv2(ViT-B/14) [HERE](https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/dinov2_vitb14_pretrain.pth).
 
+The GSV-Cities training dataset root should contain:
+
+```
+gsv_cities/
+├── Dataframes/
+└── Images/
+```
+
+You can validate a downloaded GSV-Cities directory before training with:
+
+```
+python3 scripts/check_gsv_cities.py /path/to/datasets_vg/datasets/gsv_cities
+```
+
+To run a stronger check that verifies more rows from each city CSV:
+
+```
+python3 scripts/check_gsv_cities.py /path/to/datasets_vg/datasets/gsv_cities --sample-rows-per-csv 5
+```
+
+The script checks that:
+
+- the dataset root exists
+- `Dataframes/` and `Images/` exist
+- each city CSV contains the required metadata columns
+- sampled CSV rows resolve to real image files using the same filename logic as the training loader
+
+To check a dataset tree for zero-byte files and optionally verify that image files can be decoded:
+
+```
+python3 check_nonempty_files.py /path/to/dataset_directory
+python3 check_nonempty_files.py /path/to/dataset_directory --verify-images
+```
+
 ## Train
 ```
-python3 train.py --eval_datasets_folder=/path/to/your/datasets_vg/datasets --eval_dataset_name=msls --foundation_model_path=/path/to/pre-trained/dinov2_vitb14_pretrain.pth --backbone=dino --supervlad_clusters=4 --crossimage_encoder --patience=3 --lr=0.00005 --epochs_num=20 --train_batch_size=120 --freeze_te=8
+python3 train.py --train_dataset_folder=/path/to/datasets_vg/datasets/gsv_cities --eval_datasets_folder=/path/to/your/datasets_vg/datasets --eval_dataset_name=msls --foundation_model_path=/path/to/pre-trained/dinov2_vitb14_pretrain.pth --backbone=dino --supervlad_clusters=4 --crossimage_encoder --patience=3 --lr=0.00005 --epochs_num=20 --train_batch_size=120 --freeze_te=8
 ```
+
+## Descriptor-Space Adversarial Training
+
+Training now supports an optional descriptor-space adversarial objective for VPR. When enabled, the training loop keeps the standard clean `MultiSimilarityLoss` and adds an adversarial descriptor loss on one query image per place group. The adversarial query is optimized to move away from its hardest in-batch positive and toward its hardest in-batch negative in descriptor space.
+
+This feature is opt-in and does not change default training behavior.
+
+Example with FGSM adversarial training:
+
+```
+python3 train.py \
+  --eval_datasets_folder=/path/to/your/datasets_vg/datasets \
+  --eval_dataset_name=msls \
+  --foundation_model_path=/path/to/pre-trained/dinov2_vitb14_pretrain.pth \
+  --backbone=dino \
+  --supervlad_clusters=4 \
+  --crossimage_encoder \
+  --patience=3 \
+  --lr=0.00005 \
+  --epochs_num=20 \
+  --train_batch_size=120 \
+  --freeze_te=8 \
+  --adv_train \
+  --adv_train_attack=fgsm_linf \
+  --adv_train_eps=0.03137254901960784
+```
+
+Example with PGD adversarial training:
+
+```
+python3 train.py \
+  --eval_datasets_folder=/path/to/your/datasets_vg/datasets \
+  --eval_dataset_name=msls \
+  --foundation_model_path=/path/to/pre-trained/dinov2_vitb14_pretrain.pth \
+  --backbone=dino \
+  --supervlad_clusters=4 \
+  --crossimage_encoder \
+  --patience=3 \
+  --lr=0.00005 \
+  --epochs_num=20 \
+  --train_batch_size=120 \
+  --freeze_te=8 \
+  --adv_train \
+  --adv_train_attack=pgd_linf \
+  --adv_train_eps=0.03137254901960784 \
+  --adv_train_steps=10 \
+  --adv_train_step_size=0.00784313725490196
+```
+
+Available adversarial training flags:
+
+- `--adv_train`: enable descriptor-space adversarial training
+- `--adv_train_attack`: training-time attack type, `fgsm_linf` or `pgd_linf`
+- `--adv_train_eps`: `L_inf` perturbation radius in pixel space
+- `--adv_train_steps`: number of PGD steps
+- `--adv_train_step_size`: optional PGD step size, defaults to `eps / 4`
+- `--adv_train_weight`: weight for the adversarial descriptor loss
+- `--adv_train_clean_weight`: weight for the clean metric-learning loss
+- `--adv_train_query_index`: which image inside each place group is treated as the attacked query, default `0`
+- `--adv_train_random_start` / `--no-adv_train_random_start`: enable or disable PGD random start, enabled by default
+- `--adv_train_log_interval`: batch interval for adversarial-training logs
+
+Notes:
+
+- Only the selected query image from each place group is perturbed in v1.
+- Positive and negative descriptor targets are mined from the current training batch, not from the full database.
+- Validation and test evaluation remain clean unless you explicitly enable the existing eval-time attack flags in `eval.py`.
 
 ## Test
 ```

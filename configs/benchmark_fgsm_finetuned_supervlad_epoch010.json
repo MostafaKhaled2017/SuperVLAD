@@ -1,0 +1,25 @@
+{
+  "eval": {
+    "eval_datasets_folder": "datasets",
+    "train_dataset_folder": "datasets/gsv_cities",
+    "eval_dataset_name": "msls",
+    "resume": "logs/fgsm_finetune_from_supervlad/2026-04-15_14-20-14/checkpoint_epoch_010.pth",
+    "backbone": "dino",
+    "supervlad_clusters": 4,
+    "crossimage_encoder": true,
+    "infer_batch_size": 8,
+    "device": "cuda",
+    "num_workers": 8,
+    "test_method": "hard_resize"
+  },
+  "attacks": {
+    "corruptions": {},
+    "white_box": {
+      "fgsm_linf": {
+        "attack_eps": [0.00784313725490196, 0.01568627450980392, 0.03137254901960784],
+        "attack_seeds": [0]
+      }
+    },
+    "token_mask": {}
+  }
+}

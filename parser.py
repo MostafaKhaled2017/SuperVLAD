@@ -114,6 +114,29 @@ def parse_arguments():
                         help="Token keep ratio used when attack_name=token_mask.")
     parser.add_argument("--feature_cache_dir", type=str, default=None,
                         help="Optional directory for cached clean database descriptors during evaluation.")
+    parser.add_argument("--adv_train", action="store_true",
+                        help="Enable descriptor-space adversarial training during optimization.")
+    parser.add_argument("--adv_train_attack", type=str, default="fgsm_linf",
+                        choices=["fgsm_linf", "pgd_linf"],
+                        help="White-box attack used to generate adversarial training queries.")
+    parser.add_argument("--adv_train_eps", type=float, default=None,
+                        help="L_inf radius in pixel space for adversarial training.")
+    parser.add_argument("--adv_train_steps", type=int, default=10,
+                        help="Number of optimization steps for PGD adversarial training.")
+    parser.add_argument("--adv_train_step_size", type=float, default=None,
+                        help="Per-step L_inf update size in pixel space for PGD adversarial training.")
+    parser.add_argument("--adv_train_weight", type=float, default=1.0,
+                        help="Weight applied to the adversarial descriptor loss.")
+    parser.add_argument("--adv_train_clean_weight", type=float, default=1.0,
+                        help="Weight applied to the clean metric-learning loss.")
+    parser.add_argument("--adv_train_query_index", type=int, default=0,
+                        help="Per-place image index used as the attacked query during training.")
+    parser.add_argument("--adv_train_random_start", action=argparse.BooleanOptionalAction, default=True,
+                        help="Use a random start inside the L_inf ball for PGD adversarial training.")
+    parser.add_argument("--adv_train_log_interval", type=int, default=50,
+                        help="How often to log batch-level adversarial training statistics.")
+    parser.add_argument("--checkpoint_save_interval", type=int, default=1,
+                        help="Save a retained epoch checkpoint every N epochs during training.")
     # Data augmentation parameters
     parser.add_argument("--brightness", type=float, default=None, help="_")
     parser.add_argument("--contrast", type=float, default=None, help="_")
@@ -125,6 +148,8 @@ def parse_arguments():
     parser.add_argument("--random_rotation", type=float, default=None, help="_")
     # Paths parameters
     parser.add_argument("--eval_datasets_folder", type=str, default=None, help="Path with all datasets")
+    parser.add_argument("--train_dataset_folder", type=str, default=None,
+                        help="Path to the GSV-Cities training dataset root")
     parser.add_argument("--eval_dataset_name", type=str, default="pitts30k", help="Relative path of the dataset")
     parser.add_argument("--pca_dataset_folder", type=str, default=None,
                         help="Path with images to be used to compute PCA (ie: pitts30k/images/train")
@@ -157,7 +182,35 @@ def parse_arguments():
     
     if args.pca_dim != None and args.pca_dataset_folder == None:
         raise ValueError("Please specify --pca_dataset_folder when using pca")
+    
+    if args.train_dataset_folder is None:
+        raise ValueError("Please specify --train_dataset_folder pointing to the gsv_cities dataset root")
 
+    validate_training_arguments(args)
     adversarial.validate_attack_arguments(args)
     
     return args
+
+
+def validate_training_arguments(args):
+    if not getattr(args, "adv_train", False):
+        return
+
+    if getattr(args, "adv_train_attack", None) not in {"fgsm_linf", "pgd_linf"}:
+        raise ValueError("adv_train_attack must be one of {'fgsm_linf', 'pgd_linf'}")
+    if getattr(args, "adv_train_eps", None) is None or args.adv_train_eps <= 0:
+        raise ValueError("adv_train requires --adv_train_eps > 0")
+    if getattr(args, "adv_train_query_index", 0) < 0:
+        raise ValueError("adv_train_query_index must be >= 0")
+    if getattr(args, "adv_train_weight", 1.0) < 0:
+        raise ValueError("adv_train_weight must be >= 0")
+    if getattr(args, "adv_train_clean_weight", 1.0) < 0:
+        raise ValueError("adv_train_clean_weight must be >= 0")
+    if getattr(args, "adv_train_log_interval", 1) <= 0:
+        raise ValueError("adv_train_log_interval must be > 0")
+    if getattr(args, "checkpoint_save_interval", 1) <= 0:
+        raise ValueError("checkpoint_save_interval must be > 0")
+    if getattr(args, "adv_train_attack", "fgsm_linf") == "pgd_linf" and getattr(args, "adv_train_steps", 0) <= 0:
+        raise ValueError("PGD adversarial training requires --adv_train_steps > 0")
+    if getattr(args, "adv_train_attack", "fgsm_linf") == "fgsm_linf" and getattr(args, "adv_train_steps", 1) <= 0:
+        raise ValueError("adv_train_steps must be > 0")
