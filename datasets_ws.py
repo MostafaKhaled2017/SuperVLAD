@@ -85,8 +85,14 @@ class BaseDataset(data.Dataset):
         self.database_paths = sorted(glob(join(database_folder, "**", "*.jpg"), recursive=True))
         self.queries_paths  = sorted(glob(join(queries_folder, "**", "*.jpg"),  recursive=True))
         # The format must be path/to/file/@utm_easting@utm_northing@...@.jpg
-        self.database_utms = np.array([(path.split("@")[1], path.split("@")[2]) for path in self.database_paths]).astype(np.float)
-        self.queries_utms  = np.array([(path.split("@")[1], path.split("@")[2]) for path in self.queries_paths]).astype(np.float)
+        self.database_utms = np.array(
+            [(path.split("@")[1], path.split("@")[2]) for path in self.database_paths],
+            dtype=np.float64,
+        )
+        self.queries_utms = np.array(
+            [(path.split("@")[1], path.split("@")[2]) for path in self.queries_paths],
+            dtype=np.float64,
+        )
         
         # Find soft_positives_per_query, which are within val_positive_dist_threshold (deafult 25 meters)
         knn = NearestNeighbors(n_jobs=-1)
@@ -403,4 +409,3 @@ class RAMEfficient2DMatrix:
             return np.array([self.matrix[i] for i in index])
         else:
             return self.matrix[index]
-

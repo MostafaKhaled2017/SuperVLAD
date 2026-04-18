@@ -8,5 +8,8 @@ results/
 test/
 venv/
 
+.cache
+.tmp
+
 reports/
 
