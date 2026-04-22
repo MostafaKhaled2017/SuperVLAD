@@ -11,7 +11,6 @@ from os.path import join
 import torch.utils.data as data
 import torchvision.transforms as transforms
 from torch.utils.data.dataset import Subset
-from sklearn.neighbors import NearestNeighbors
 from torch.utils.data.dataloader import DataLoader
 
 
@@ -23,6 +22,20 @@ base_transform = transforms.Compose([
 
 def path_to_pil_img(path):
     return Image.open(path).convert("RGB")
+
+
+def radius_neighbors(reference_points, query_points, radius):
+    """Return indexes of reference points within ``radius`` of each query point."""
+    reference_points = np.asarray(reference_points, dtype=np.float64)
+    query_points = np.asarray(query_points, dtype=np.float64)
+    radius_squared = float(radius) ** 2
+    neighbors = []
+
+    for query_point in query_points:
+        squared_distances = np.sum((reference_points - query_point) ** 2, axis=1)
+        neighbors.append(np.flatnonzero(squared_distances <= radius_squared).astype(np.int64))
+
+    return np.asarray(neighbors, dtype=object)
 
 
 def collate_fn(batch):
@@ -95,11 +108,11 @@ class BaseDataset(data.Dataset):
         )
         
         # Find soft_positives_per_query, which are within val_positive_dist_threshold (deafult 25 meters)
-        knn = NearestNeighbors(n_jobs=-1)
-        knn.fit(self.database_utms)
-        self.soft_positives_per_query = knn.radius_neighbors(self.queries_utms, 
-                                                             radius=args.val_positive_dist_threshold,
-                                                             return_distance=False)
+        self.soft_positives_per_query = radius_neighbors(
+            self.database_utms,
+            self.queries_utms,
+            args.val_positive_dist_threshold,
+        )
         
         self.images_paths = list(self.database_paths) + list(self.queries_paths)
         
@@ -181,11 +194,13 @@ class TripletsDataset(BaseDataset):
         ])
         
         # Find hard_positives_per_query, which are within train_positives_dist_threshold (10 meters)
-        knn = NearestNeighbors(n_jobs=-1)
-        knn.fit(self.database_utms)
-        self.hard_positives_per_query = list(knn.radius_neighbors(self.queries_utms,
-                                             radius=args.train_positives_dist_threshold,  # 10 meters
-                                             return_distance=False))
+        self.hard_positives_per_query = list(
+            radius_neighbors(
+                self.database_utms,
+                self.queries_utms,
+                args.train_positives_dist_threshold,  # 10 meters
+            )
+        )
         
         #### Some queries might have no positive, we should remove those queries.
         queries_without_any_hard_positive = np.where(np.array([len(p) for p in self.hard_positives_per_query], dtype=object) == 0)[0]
