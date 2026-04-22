@@ -59,9 +59,21 @@ LOSS_FN = None
 MINER = None
 
 
+def unwrap_model(model):
+    return model.module if hasattr(model, "module") else model
+
+
 def build_parser():
     parser = parser_module.build_parser()
     parser.description = "Rank-aware adversarial training for SuperVLAD"
+    parser.add_argument(
+        "--resume_model_only",
+        action="store_true",
+        help=(
+            "Load only the model weights from --resume and reset optimizer, epoch, and "
+            "early-stopping state. Recommended when adversarially fine-tuning a converged checkpoint."
+        ),
+    )
     parser.add_argument(
         "--adv_epsilon",
         type=float,
@@ -123,6 +135,16 @@ def build_parser():
         help="TensorBoard log directory. Defaults to <save_dir>/tensorboard.",
     )
     parser.add_argument(
+        "--save-every",
+        dest="save_every",
+        type=int,
+        default=1,
+        help=(
+            "Save an additional intermediate checkpoint every N epochs. "
+            "The latest checkpoint is always saved after each epoch."
+        ),
+    )
+    parser.add_argument(
         "--gsv_cities_base_path",
         type=str,
         default=None,
@@ -154,6 +176,8 @@ def parse_arguments():
         raise ValueError("--adv_warmup_epochs must be non-negative")
     if args.early_stop_min_delta < 0:
         raise ValueError("--early_stop_min_delta must be non-negative")
+    if args.save_every < 1:
+        raise ValueError("--save-every must be at least 1")
 
     if args.adv_alpha is None:
         args.adv_alpha = args.adv_epsilon / args.adv_steps if args.adv_steps > 0 else 0.0
@@ -400,8 +424,15 @@ def build_training_dataloader(args):
 
 
 def maybe_copy_resume_checkpoint(args):
+    if args.resume is None:
+        return
+
+    initial_checkpoint_path = join(args.save_dir, "initial_model.pth")
+    if not exists(initial_checkpoint_path):
+        shutil.copyfile(args.resume, initial_checkpoint_path)
+
     best_checkpoint_path = join(args.save_dir, "best_model.pth")
-    if args.resume is not None and not exists(best_checkpoint_path):
+    if not args.resume_model_only and not exists(best_checkpoint_path):
         shutil.copyfile(args.resume, best_checkpoint_path)
 
 
@@ -445,7 +476,7 @@ def main():
             optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
             optim_encoder = None
             if args.crossimage_encoder:
-                optim_encoder = torch.optim.Adam(model.module.encoder.parameters(), lr=args.lr_encoder)
+                optim_encoder = torch.optim.Adam(unwrap_model(model).encoder.parameters(), lr=args.lr_encoder)
         elif args.optim == "sgd":
             optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=0.001)
             optim_encoder = None
@@ -456,8 +487,23 @@ def main():
             raise ValueError(f"Unsupported optimizer {args.optim!r}")
 
         if args.resume:
-            model, optimizer, best_r5, start_epoch_num, not_improved_num = util.resume_train(args, model, optimizer)
-            logging.info("Resuming from epoch %d with best validation score %.1f", start_epoch_num, best_r5)
+            if args.resume_model_only:
+                util.resume_model(args, unwrap_model(model))
+                best_r5 = -1.0
+                start_epoch_num = 0
+                not_improved_num = 0
+                logging.info(
+                    "Loaded model weights from %s and reset optimizer, epoch, and early-stopping state.",
+                    args.resume,
+                )
+            else:
+                model, optimizer, best_r5, start_epoch_num, not_improved_num = util.resume_train(args, model, optimizer)
+                logging.info("Resuming from epoch %d with best validation score %.1f", start_epoch_num, best_r5)
+                logging.info(
+                    "Reused optimizer and early-stopping state from %s. "
+                    "For adversarial fine-tuning from a converged checkpoint, consider --resume_model_only.",
+                    args.resume,
+                )
         else:
             best_r5 = -1.0
             start_epoch_num = 0
@@ -560,10 +606,10 @@ def main():
                 else:
                     total_loss.backward()
                     if args.crossimage_encoder and optim_encoder is not None:
-                        for parameter in model.module.encoder.parameters():
+                        for parameter in unwrap_model(model).encoder.parameters():
                             parameter.requires_grad = True
                         optim_encoder.step()
-                        for parameter in model.module.encoder.parameters():
+                        for parameter in unwrap_model(model).encoder.parameters():
                             parameter.requires_grad = False
                     optimizer.step()
 
@@ -623,22 +669,45 @@ def main():
             is_best = val_score > (best_r5 + args.early_stop_min_delta)
             next_best_r5 = val_score if is_best else best_r5
             next_not_improved_num = 0 if is_best else not_improved_num + 1
+            completed_epochs = epoch_num + 1
+            checkpoint_state = {
+                "epoch_num": epoch_num,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "recalls": recalls,
+                "best_r5": next_best_r5,
+                "not_improved_num": next_not_improved_num,
+                "early_stop_min_delta": args.early_stop_min_delta,
+                "tensorboard_dir": args.tensorboard_dir,
+                "save_every": args.save_every,
+            }
 
             util.save_checkpoint(
                 args,
-                {
-                    "epoch_num": epoch_num,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "recalls": recalls,
-                    "best_r5": next_best_r5,
-                    "not_improved_num": next_not_improved_num,
-                    "early_stop_min_delta": args.early_stop_min_delta,
-                    "tensorboard_dir": args.tensorboard_dir,
-                },
+                checkpoint_state,
                 is_best,
                 filename="last_model.pth",
             )
+            logging.info(
+                "Saved latest checkpoint after epoch %02d%s.",
+                completed_epochs,
+                " (best model updated)" if is_best else "",
+            )
+
+            if completed_epochs % args.save_every == 0:
+                intermediate_checkpoint_name = f"checkpoint_epoch_{completed_epochs:04d}.pth"
+                util.save_checkpoint(
+                    args,
+                    checkpoint_state,
+                    False,
+                    filename=intermediate_checkpoint_name,
+                )
+                logging.info(
+                    "Saved intermediate checkpoint %s after epoch %02d because --save-every=%d.",
+                    intermediate_checkpoint_name,
+                    completed_epochs,
+                    args.save_every,
+                )
 
             if is_best:
                 improvement = val_score - best_r5

@@ -37,10 +37,10 @@ python3 train.py --eval_datasets_folder=/path/to/your/datasets_vg/datasets --eva
 python3 adv_train.py --eval_datasets_folder=/path/to/your/datasets_vg/datasets --eval_dataset_name=msls --foundation_model_path=/path/to/pre-trained/dinov2_vitb14_pretrain.pth --backbone=dino --supervlad_clusters=4 --crossimage_encoder --patience=3 --lr=0.00005 --epochs_num=20 --train_batch_size=120 --freeze_te=8 --adv_epsilon=0.001 --adv_steps=3 --adv_loss_weight=1.0 --adv_align_weight=0.05 --adv_negatives=5
 ```
 
-To adversarially fine-tune the current SuperVLAD checkpoint instead of training from scratch, resume from `checkpoints/SuperVLAD.pth` and point the script to the GSV-Cities training set used for optimization:
+To adversarially fine-tune the current SuperVLAD checkpoint instead of training from scratch, resume from `checkpoints/SuperVLAD.pth` and point the script to the GSV-Cities training set used for optimization. When fine-tuning a converged checkpoint, prefer `--resume_model_only` so the adversarial run starts with fresh optimizer and early-stopping state instead of inheriting the clean-training state:
 
 ```
-python3 adv_train.py --eval_datasets_folder=/path/to/your/datasets_vg/datasets --gsv_cities_base_path=/path/to/your/gsv_cities --eval_dataset_name=msls --resume=checkpoints/SuperVLAD.pth --foundation_model_path=/path/to/pre-trained/dinov2_vitb14_pretrain.pth --backbone=dino --supervlad_clusters=4 --crossimage_encoder --patience=3 --lr=0.00005 --epochs_num=20 --train_batch_size=120 --freeze_te=8 --adv_epsilon=0.001 --adv_steps=3 --adv_loss_weight=1.0 --adv_align_weight=0.05 --adv_negatives=5
+python3 adv_train.py --eval_datasets_folder=/path/to/your/datasets_vg/datasets --gsv_cities_base_path=/path/to/your/gsv_cities --eval_dataset_name=msls --resume=checkpoints/SuperVLAD.pth --resume_model_only --foundation_model_path=/path/to/pre-trained/dinov2_vitb14_pretrain.pth --backbone=dino --supervlad_clusters=4 --crossimage_encoder --patience=3 --lr=0.00005 --epochs_num=20 --train_batch_size=120 --freeze_te=8 --adv_epsilon=0.001 --adv_steps=3 --adv_loss_weight=1.0 --adv_align_weight=0.05 --adv_negatives=5
 ```
 
 If `--gsv_cities_base_path` is omitted, the script will try `$GSV_CITIES_BASE_PATH` and then `<eval_datasets_folder>/gsv_cities`.
