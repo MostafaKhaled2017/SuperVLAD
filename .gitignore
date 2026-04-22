@@ -8,5 +8,7 @@ results/
 test/
 venv/
 
+.venv/
+
 reports/
 
