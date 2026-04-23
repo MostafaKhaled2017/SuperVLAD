@@ -1,0 +1,192 @@
+{
+  "timestamp": "2026-04-23T01:39:52.534969",
+  "command": "/home/server/repos/SuperVLAD/fgsm_eval.py --eval_datasets_folder=datasets --eval_dataset_name=msls --resume=/home/server/repos/SuperVLAD/logs/default/2026-04-22_05-16-06/checkpoint_epoch_0006.pth --backbone=dino --supervlad_clusters=4 --crossimage_encoder --infer_batch_size=32 --save_dir=batch_fgsm/2026-04-23_00-48-24/positive_distance/2026-04-22_05-16-06__checkpoint_epoch_0006 --epsilons 0.01 0.1 0.2 --fgsm_loss positive_distance",
+  "argv": [
+    "/home/server/repos/SuperVLAD/fgsm_eval.py",
+    "--eval_datasets_folder=datasets",
+    "--eval_dataset_name=msls",
+    "--resume=/home/server/repos/SuperVLAD/logs/default/2026-04-22_05-16-06/checkpoint_epoch_0006.pth",
+    "--backbone=dino",
+    "--supervlad_clusters=4",
+    "--crossimage_encoder",
+    "--infer_batch_size=32",
+    "--save_dir=batch_fgsm/2026-04-23_00-48-24/positive_distance/2026-04-22_05-16-06__checkpoint_epoch_0006",
+    "--epsilons",
+    "0.01",
+    "0.1",
+    "0.2",
+    "--fgsm_loss",
+    "positive_distance"
+  ],
+  "checkpoint": "/home/server/repos/SuperVLAD/logs/default/2026-04-22_05-16-06/checkpoint_epoch_0006.pth",
+  "dataset": "msls",
+  "arguments": {
+    "train_batch_size": 60,
+    "infer_batch_size": 32,
+    "criterion": "triplet",
+    "margin": 0.1,
+    "epochs_num": 1000,
+    "patience": 3,
+    "lr": 1e-05,
+    "lr_encoder": 0.0001,
+    "lr_crn_net": 0.0005,
+    "optim": "adam",
+    "mixed_precision": false,
+    "cache_refresh_rate": 1000,
+    "queries_per_epoch": 5000,
+    "negs_num_per_query": 10,
+    "neg_samples_num": 1000,
+    "mining": "partial",
+    "backbone": "dino",
+    "crossimage_encoder": true,
+    "l2": "before_pool",
+    "supervlad_clusters": 4,
+    "ghost_clusters": 1,
+    "pca_dim": null,
+    "num_non_local": 1,
+    "non_local": false,
+    "channel_bottleneck": 128,
+    "fc_output_dim": null,
+    "pretrain": "imagenet",
+    "off_the_shelf": "imagenet",
+    "trunc_te": null,
+    "freeze_te": null,
+    "seed": 0,
+    "foundation_model_path": null,
+    "resume": "/home/server/repos/SuperVLAD/logs/default/2026-04-22_05-16-06/checkpoint_epoch_0006.pth",
+    "device": "cuda",
+    "num_workers": 8,
+    "resize": [
+      322,
+      322
+    ],
+    "test_method": "hard_resize",
+    "majority_weight": 0.01,
+    "efficient_ram_testing": false,
+    "val_positive_dist_threshold": 25,
+    "train_positives_dist_threshold": 10,
+    "recall_values": [
+      1,
+      5,
+      10,
+      100
+    ],
+    "brightness": null,
+    "contrast": null,
+    "saturation": null,
+    "hue": null,
+    "rand_perspective": null,
+    "horizontal_flip": false,
+    "random_resized_crop": null,
+    "random_rotation": null,
+    "eval_datasets_folder": "datasets",
+    "eval_dataset_name": "msls",
+    "pca_dataset_folder": null,
+    "save_dir": "test/batch_fgsm/2026-04-23_00-48-24/positive_distance/2026-04-22_05-16-06__checkpoint_epoch_0006/2026-04-23_01-39-52",
+    "epsilons": [
+      0.01,
+      0.1,
+      0.2
+    ],
+    "fgsm_loss": "positive_distance",
+    "output_json": null,
+    "fgsm_negatives": 5,
+    "fgsm_margin": 0.1,
+    "resume_eval_dir": null,
+    "work_with_tokens": false,
+    "features_dim": 3072
+  },
+  "attack": {
+    "mode": "positive_distance",
+    "epsilons": [
+      0.01,
+      0.1,
+      0.2
+    ],
+    "scope": "queries_only",
+    "database_features_reused": true,
+    "supported_test_methods": [
+      "central_crop",
+      "hard_resize",
+      "single_query"
+    ],
+    "query_counts": {
+      "total_queries": 25622,
+      "applied_queries": 24344,
+      "skipped_queries": 1278
+    }
+  },
+  "results": {
+    "clean": {
+      "recalls": {
+        "R@1": 70.12332916259766,
+        "R@5": 81.45734405517578,
+        "R@10": 83.9473876953125,
+        "R@100": 89.63780975341797
+      },
+      "recalls_list": [
+        70.12332916259766,
+        81.45734405517578,
+        83.9473876953125,
+        89.63780975341797
+      ],
+      "recalls_str": "R@1: 70.1, R@5: 81.5, R@10: 83.9, R@100: 89.6"
+    },
+    "eps_0.01": {
+      "recalls": {
+        "R@1": 44.88991165161133,
+        "R@5": 57.209171295166016,
+        "R@10": 61.620933532714844,
+        "R@100": 76.4459457397461
+      },
+      "recalls_list": [
+        44.88991165161133,
+        57.209171295166016,
+        61.620933532714844,
+        76.4459457397461
+      ],
+      "recalls_str": "R@1: 44.9, R@5: 57.2, R@10: 61.6, R@100: 76.4",
+      "epsilon": 0.01,
+      "attacked_queries": 24344,
+      "skipped_queries_without_positives": 1278
+    },
+    "eps_0.1": {
+      "recalls": {
+        "R@1": 21.80824851989746,
+        "R@5": 30.01150131225586,
+        "R@10": 33.68797302246094,
+        "R@100": 48.80463409423828
+      },
+      "recalls_list": [
+        21.80824851989746,
+        30.01150131225586,
+        33.68797302246094,
+        48.80463409423828
+      ],
+      "recalls_str": "R@1: 21.8, R@5: 30.0, R@10: 33.7, R@100: 48.8",
+      "epsilon": 0.1,
+      "attacked_queries": 24344,
+      "skipped_queries_without_positives": 1278
+    },
+    "eps_0.2": {
+      "recalls": {
+        "R@1": 21.88218879699707,
+        "R@5": 30.730363845825195,
+        "R@10": 34.73134994506836,
+        "R@100": 50.33683776855469
+      },
+      "recalls_list": [
+        21.88218879699707,
+        30.730363845825195,
+        34.73134994506836,
+        50.33683776855469
+      ],
+      "recalls_str": "R@1: 21.9, R@5: 30.7, R@10: 34.7, R@100: 50.3",
+      "epsilon": 0.2,
+      "attacked_queries": 24344,
+      "skipped_queries_without_positives": 1278
+    }
+  },
+  "output_json": "test/batch_fgsm/2026-04-23_00-48-24/positive_distance/2026-04-22_05-16-06__checkpoint_epoch_0006/2026-04-23_01-39-52/fgsm_eval_results.json",
+  "duration_seconds": 3079.040185
+}
