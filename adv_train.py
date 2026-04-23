@@ -63,6 +63,50 @@ def unwrap_model(model):
     return model.module if hasattr(model, "module") else model
 
 
+def _parse_sm_arch(arch):
+    if not arch.startswith("sm_"):
+        return None
+    suffix = arch.split("_", 1)[1]
+    if not suffix.isdigit():
+        return None
+    if len(suffix) == 2:
+        return int(suffix[0]), int(suffix[1])
+    return int(suffix[:-1]), int(suffix[-1])
+
+
+def validate_cuda_runtime(args):
+    if args.device != "cuda":
+        return
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA was requested with --device cuda, but PyTorch cannot access a CUDA device. "
+            "Install a CUDA-enabled PyTorch build or rerun with --device cpu."
+        )
+
+    arch_list = torch.cuda.get_arch_list()
+    supported_arches = [arch for arch in arch_list if arch.startswith("sm_")]
+    parsed_arches = [arch for arch in (_parse_sm_arch(arch) for arch in supported_arches) if arch is not None]
+    if not parsed_arches:
+        return
+
+    device_index = torch.cuda.current_device()
+    gpu_name = torch.cuda.get_device_name(device_index)
+    device_capability = torch.cuda.get_device_capability(device_index)
+    max_supported_arch = max(parsed_arches)
+
+    if device_capability > max_supported_arch:
+        device_sm = f"sm_{device_capability[0]}{device_capability[1]}"
+        supported_sm = f"sm_{max_supported_arch[0]}{max_supported_arch[1]}"
+        raise RuntimeError(
+            "The installed PyTorch CUDA build does not support this GPU architecture. "
+            f"Detected GPU '{gpu_name}' with compute capability {device_sm}, but "
+            f"PyTorch {torch.__version__} built against CUDA {torch.version.cuda} only includes kernels "
+            f"through {supported_sm}. Install a newer torch/torchvision build for this GPU, or rerun "
+            "with --device cpu. The current requirements pin torch==2.5.1 from the cu121 index, "
+            "which is too old for RTX 50-series / Blackwell GPUs."
+        )
+
+
 def build_parser():
     parser = parser_module.build_parser()
     parser.description = "Rank-aware adversarial training for SuperVLAD"
@@ -452,6 +496,7 @@ def main():
     logging.info("The outputs are being saved in %s", args.save_dir)
     logging.info("TensorBoard logs will be written to %s", args.tensorboard_dir)
     logging.info("Using %d GPUs and %d CPUs", torch.cuda.device_count(), multiprocessing.cpu_count())
+    validate_cuda_runtime(args)
 
     writer = create_summary_writer(args.tensorboard_dir)
     try:
@@ -747,7 +792,10 @@ def main():
         logging.info("Best validation score (R@1 + R@5): %.1f", best_r5)
         logging.info("Trained for %02d epochs, in total in %s", epoch_num + 1, str(datetime.now() - start_time)[:-7])
 
-        best_model_state_dict = torch.load(join(args.save_dir, "best_model.pth"))["model_state_dict"]
+        best_model_state_dict = util.load_trusted_checkpoint(
+            join(args.save_dir, "best_model.pth"),
+            map_location=args.device,
+        )["model_state_dict"]
         model.load_state_dict(best_model_state_dict)
 
         recalls, recalls_str = test.test(args, test_ds, model, test_method=args.test_method)

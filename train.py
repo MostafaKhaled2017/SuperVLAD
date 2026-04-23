@@ -262,9 +262,11 @@ logging.info(f"Best R@5: {best_r5:.1f}")
 logging.info(f"Trained for {epoch_num+1:02d} epochs, in total in {str(datetime.now() - start_time)[:-7]}")
 
 #### Test best model on test set
-best_model_state_dict = torch.load(join(args.save_dir, "best_model.pth"))["model_state_dict"]
+best_model_state_dict = util.load_trusted_checkpoint(
+    join(args.save_dir, "best_model.pth"),
+    map_location=args.device,
+)["model_state_dict"]
 model.load_state_dict(best_model_state_dict)
 
 recalls, recalls_str = test.test(args, test_ds, model, test_method=args.test_method)
 logging.info(f"Recalls on {test_ds}: {recalls_str}")
-
