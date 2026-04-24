@@ -6,16 +6,15 @@ from typing import Dict, List, Sequence
 import numpy as np
 import torch
 from torch import Tensor, nn
-from torch.cuda.amp import autocast
 from tqdm import tqdm
 
 import test
 import util
 from .checkpoints import apply_lr_schedule, maybe_remove_old_checkpoint
+from .config import amp_autocast, unwrap_model
 from .eval import evaluate_against_attacks_retrieval, make_attack_name
 from .losses import compute_align_loss, compute_rank_loss, loss_function, query_is_correct
 from .targets import RetrievalAttackBatch, select_rank_targets
-from .config import unwrap_model
 
 
 def compute_attack_losses(
@@ -40,7 +39,9 @@ def compute_attack_losses(
     align_losses = []
     for attack in attacks:
         adv_queries = attack(query_inputs, attack_targets)
-        adv_query_descriptors = model(adv_queries, queryflag=0).float()
+        with amp_autocast(args.mixed_precision, args.device):
+            adv_query_descriptors = model(adv_queries, queryflag=0)
+        adv_query_descriptors = adv_query_descriptors.float()
         rank_loss = compute_rank_loss(
             adv_query_descriptors,
             attack_targets.positive_descriptors,
@@ -156,7 +157,9 @@ def run_training(
 
             model.eval()
             with torch.no_grad():
-                clean_descriptors_eval = model(flat_images, queryflag=0).float()
+                with amp_autocast(args.mixed_precision, args.device):
+                    clean_descriptors_eval = model(flat_images, queryflag=0)
+                clean_descriptors_eval = clean_descriptors_eval.float()
             clean_descriptor_view = clean_descriptors_eval.reshape(batch_size, images_per_place, -1)
             rank_targets = select_rank_targets(clean_descriptor_view, place_id, args.adv_negatives)
 
@@ -184,8 +187,10 @@ def run_training(
 
             optimizer.zero_grad(set_to_none=True)
             model.train()
-            with autocast(enabled=args.mixed_precision):
-                clean_descriptors = model(flat_images, queryflag=0).float()
+            with amp_autocast(args.mixed_precision, args.device):
+                clean_descriptors = model(flat_images, queryflag=0)
+            clean_descriptors = clean_descriptors.float()
+            with amp_autocast(args.mixed_precision, args.device):
                 clean_loss = loss_function(clean_descriptors, labels)
 
                 attack_outputs = compute_attack_losses(

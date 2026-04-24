@@ -1,9 +1,11 @@
 import warnings
+from contextlib import nullcontext
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import ContextManager, Optional, Tuple
 
 import torch
 from torch import Tensor, nn
+from torch.cuda.amp import autocast
 
 torch.backends.cudnn.benchmark = True
 warnings.filterwarnings("ignore")
@@ -59,6 +61,16 @@ UNSUPPORTED_ATTACK_NAMES = {"AutoAttack", "AutoLinfAttack", "AutoL2Attack"}
 
 def unwrap_model(model: nn.Module) -> nn.Module:
     return model.module if hasattr(model, "module") else model
+
+
+def amp_enabled(mixed_precision: bool, device: str) -> bool:
+    return bool(mixed_precision and device == "cuda")
+
+
+def amp_autocast(mixed_precision: bool, device: str) -> ContextManager:
+    if amp_enabled(mixed_precision, device):
+        return autocast(enabled=True)
+    return nullcontext()
 
 
 def _parse_sm_arch(arch: str) -> Optional[Tuple[int, int]]:

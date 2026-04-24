@@ -6,16 +6,18 @@ from typing import Dict, Sequence
 import torch
 from torch import Tensor, nn
 
-from .config import unwrap_model
+from .config import amp_autocast, unwrap_model
 from .losses import compute_attack_score
 from .targets import RetrievalAttackBatch
 
 
 class RetrievalAttackProxy(nn.Module):
-    def __init__(self, model: nn.Module, margin: float):
+    def __init__(self, model: nn.Module, margin: float, mixed_precision: bool, device: str):
         super().__init__()
         self.model = model
         self.margin = margin
+        self.mixed_precision = mixed_precision
+        self.device = device
         self.current_targets: RetrievalAttackBatch | None = None
 
     def set_targets(self, targets: RetrievalAttackBatch) -> None:
@@ -28,7 +30,9 @@ class RetrievalAttackProxy(nn.Module):
         if self.current_targets is None:
             raise RuntimeError("RetrievalAttackProxy.forward() called without targets.")
 
-        query_descriptors = self.model(inputs, queryflag=0).float()
+        with amp_autocast(self.mixed_precision, self.device):
+            query_descriptors = self.model(inputs, queryflag=0)
+        query_descriptors = query_descriptors.float()
         attack_scores = compute_attack_score(
             query_descriptors,
             self.current_targets.positive_descriptors,
@@ -55,13 +59,18 @@ class RetrievalAttackWrapper(nn.Module):
     backend_cls = None
     default_kwargs: Dict[str, object] = {}
 
-    def __init__(self, model: nn.Module, margin: float = 0.1, **kwargs):
+    def __init__(self, model: nn.Module, margin: float = 0.1, mixed_precision: bool = False, device: str = "cuda", **kwargs):
         super().__init__()
         if self.backend_cls is None:
             raise RuntimeError("backend_cls must be defined by subclasses.")
         self.model = model
         self.margin = margin
-        self.proxy_model = RetrievalAttackProxy(unwrap_model(model), margin)
+        self.proxy_model = RetrievalAttackProxy(
+            unwrap_model(model),
+            margin,
+            mixed_precision=mixed_precision,
+            device=device,
+        )
         merged_kwargs = dict(self.default_kwargs)
         merged_kwargs.update(kwargs)
         self.backend = self.backend_cls(self.proxy_model, **merged_kwargs)
@@ -108,43 +117,90 @@ def build_attack_namespace(model: nn.Module, args) -> Dict[str, object]:
         backend_cls = BackendLinfAttack
 
         def __init__(self, model, dataset_name: str = "imagenet", margin: float = args.adv_margin, **kwargs):
-            super().__init__(model, margin=margin, dataset_name=dataset_name, **kwargs)
+            super().__init__(
+                model,
+                margin=margin,
+                mixed_precision=args.mixed_precision,
+                device=args.device,
+                dataset_name=dataset_name,
+                **kwargs,
+            )
 
     class L2Attack(RetrievalAttackWrapper):
         backend_cls = BackendL2Attack
 
         def __init__(self, model, dataset_name: str = "imagenet", margin: float = args.adv_margin, **kwargs):
-            super().__init__(model, margin=margin, dataset_name=dataset_name, **kwargs)
+            super().__init__(
+                model,
+                margin=margin,
+                mixed_precision=args.mixed_precision,
+                device=args.device,
+                dataset_name=dataset_name,
+                **kwargs,
+            )
 
     class L1Attack(RetrievalAttackWrapper):
         backend_cls = BackendL1Attack
 
         def __init__(self, model, dataset_name: str = "imagenet", margin: float = args.adv_margin, **kwargs):
-            super().__init__(model, margin=margin, dataset_name=dataset_name, **kwargs)
+            super().__init__(
+                model,
+                margin=margin,
+                mixed_precision=args.mixed_precision,
+                device=args.device,
+                dataset_name=dataset_name,
+                **kwargs,
+            )
 
     class JPEGLinfAttack(RetrievalAttackWrapper):
         backend_cls = BackendJPEGLinfAttack
 
         def __init__(self, model, dataset_name: str = "imagenet", margin: float = args.adv_margin, **kwargs):
-            super().__init__(model, margin=margin, dataset_name=dataset_name, **kwargs)
+            super().__init__(
+                model,
+                margin=margin,
+                mixed_precision=args.mixed_precision,
+                device=args.device,
+                dataset_name=dataset_name,
+                **kwargs,
+            )
 
     class FogAttack(RetrievalAttackWrapper):
         backend_cls = BackendFogAttack
 
         def __init__(self, model, dataset_name: str = "imagenet", margin: float = args.adv_margin, **kwargs):
-            super().__init__(model, margin=margin, dataset_name=dataset_name, **kwargs)
+            super().__init__(
+                model,
+                margin=margin,
+                mixed_precision=args.mixed_precision,
+                device=args.device,
+                dataset_name=dataset_name,
+                **kwargs,
+            )
 
     class StAdvAttack(RetrievalAttackWrapper):
         backend_cls = BackendStAdvAttack
 
         def __init__(self, model, margin: float = args.adv_margin, **kwargs):
-            super().__init__(model, margin=margin, **kwargs)
+            super().__init__(
+                model,
+                margin=margin,
+                mixed_precision=args.mixed_precision,
+                device=args.device,
+                **kwargs,
+            )
 
     class ReColorAdvAttack(RetrievalAttackWrapper):
         backend_cls = BackendReColorAdvAttack
 
         def __init__(self, model, margin: float = args.adv_margin, **kwargs):
-            super().__init__(model, margin=margin, **kwargs)
+            super().__init__(
+                model,
+                margin=margin,
+                mixed_precision=args.mixed_precision,
+                device=args.device,
+                **kwargs,
+            )
 
     class FastLagrangePerceptualAttack(RetrievalAttackWrapper):
         backend_cls = BackendFastLagrangePerceptualAttack
@@ -158,7 +214,14 @@ def build_attack_namespace(model: nn.Module, args) -> Dict[str, object]:
         ):
             if lpips_model == "self":
                 raise ValueError("pac_training.py does not support lpips_model='self' for SuperVLAD.")
-            super().__init__(model, margin=margin, lpips_model=lpips_model, **kwargs)
+            super().__init__(
+                model,
+                margin=margin,
+                mixed_precision=args.mixed_precision,
+                device=args.device,
+                lpips_model=lpips_model,
+                **kwargs,
+            )
 
     class PerceptualPGDAttack(RetrievalAttackWrapper):
         backend_cls = BackendPerceptualPGDAttack
@@ -172,7 +235,14 @@ def build_attack_namespace(model: nn.Module, args) -> Dict[str, object]:
         ):
             if lpips_model == "self":
                 raise ValueError("pac_training.py does not support lpips_model='self' for SuperVLAD.")
-            super().__init__(model, margin=margin, lpips_model=lpips_model, **kwargs)
+            super().__init__(
+                model,
+                margin=margin,
+                mixed_precision=args.mixed_precision,
+                device=args.device,
+                lpips_model=lpips_model,
+                **kwargs,
+            )
 
     class LagrangePerceptualAttack(RetrievalAttackWrapper):
         backend_cls = BackendLagrangePerceptualAttack
@@ -186,7 +256,14 @@ def build_attack_namespace(model: nn.Module, args) -> Dict[str, object]:
         ):
             if lpips_model == "self":
                 raise ValueError("pac_training.py does not support lpips_model='self' for SuperVLAD.")
-            super().__init__(model, margin=margin, lpips_model=lpips_model, **kwargs)
+            super().__init__(
+                model,
+                margin=margin,
+                mixed_precision=args.mixed_precision,
+                device=args.device,
+                lpips_model=lpips_model,
+                **kwargs,
+            )
 
     return {
         "model": unwrap_model(model),
