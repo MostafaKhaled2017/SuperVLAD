@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${REPO_ROOT}"
 
-exec python3 pat_training.py \
+exec python3 perceptual_adv_training.py \
   --eval_datasets_folder=datasets \
   --gsv_cities_base_path=datasets/gsv_cities \
   --eval_dataset_name=msls \

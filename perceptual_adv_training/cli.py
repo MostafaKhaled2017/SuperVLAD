@@ -10,7 +10,7 @@ def parse_attack_names(attack_strings):
         attack_names.append(attack_name)
         if attack_name in UNSUPPORTED_ATTACK_NAMES:
             raise NotImplementedError(
-                f"{attack_name} is not supported in pac_training.py because it relies on "
+                f"{attack_name} is not supported in perceptual_adv_training.py because it relies on "
                 "classification-specific AutoAttack behavior."
             )
         if attack_name not in SUPPORTED_ATTACK_NAMES:
@@ -40,7 +40,7 @@ def build_parser():
         help="Training batch size alias kept for perceptual-advex style.",
     )
     parser.add_argument("--val_batches", type=int, default=10, help="Number of validation query batches to attack.")
-    parser.add_argument("--log_dir", type=str, default="logs", help="Base folder for pac_training runs.")
+    parser.add_argument("--log_dir", type=str, default="logs", help="Base folder for perceptual adversarial training runs.")
     parser.add_argument("--parallel", type=int, default=1, help="Number of GPUs to use when CUDA is available.")
     parser.add_argument(
         "--only_attack_correct",
