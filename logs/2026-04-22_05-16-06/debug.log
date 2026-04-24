@@ -1,0 +1,153 @@
+2026-04-22 05:16:06   Arguments: Namespace(train_batch_size=32, infer_batch_size=16, criterion='triplet', margin=0.1, epochs_num=15, patience=15, lr=1e-05, lr_encoder=0.0001, lr_crn_net=0.0005, optim='adam', mixed_precision=False, cache_refresh_rate=1000, queries_per_epoch=5000, negs_num_per_query=10, neg_samples_num=1000, mining='partial', backbone='dino', crossimage_encoder=True, l2='before_pool', supervlad_clusters=4, ghost_clusters=1, pca_dim=None, num_non_local=1, non_local=False, channel_bottleneck=128, fc_output_dim=None, pretrain='imagenet', off_the_shelf='imagenet', trunc_te=None, freeze_te=8, seed=0, foundation_model_path='checkpoints/dinov2_vitb14_pretrain.pth', resume='checkpoints/SuperVLAD.pth', device='cuda', num_workers=8, resize=[322, 322], test_method='hard_resize', majority_weight=0.01, efficient_ram_testing=False, val_positive_dist_threshold=25, train_positives_dist_threshold=10, recall_values=[1, 5, 10, 100], brightness=None, contrast=None, saturation=None, hue=None, rand_perspective=None, horizontal_flip=False, random_resized_crop=None, random_rotation=None, eval_datasets_folder='datasets', eval_dataset_name='msls', pca_dataset_folder=None, save_dir='logs/default/2026-04-22_05-16-06', resume_model_only=True, adv_epsilon=0.01, adv_alpha=0.0033333333333333335, adv_steps=3, adv_loss_weight=0.25, adv_align_weight=0.05, adv_negatives=5, adv_warmup_epochs=2, adv_margin=0.1, early_stop_min_delta=0.0, tensorboard_dir='logs/default/2026-04-22_05-16-06/tensorboard', save_every=1, gsv_cities_base_path='datasets/gsv_cities')
+2026-04-22 05:16:06   The outputs are being saved in logs/default/2026-04-22_05-16-06
+2026-04-22 05:16:06   TensorBoard logs will be written to logs/default/2026-04-22_05-16-06/tensorboard
+2026-04-22 05:16:06   Using 1 GPUs and 32 CPUs
+2026-04-22 05:16:07   Loading dataset msls from folder datasets
+2026-04-22 05:16:07   Skipping msls train split loading because --resume is set; the checkpoint already provides initialized model weights.
+2026-04-22 05:16:10   Val set: < BaseDataset, msls - #database: 18871; #queries: 11084 >
+2026-04-22 05:16:24   Test set: < BaseDataset, msls - #database: 36558; #queries: 25622 >
+2026-04-22 05:16:24   using MLP layer as FFN
+2026-04-22 05:16:25   Loaded model weights from checkpoints/SuperVLAD.pth and reset optimizer, epoch, and early-stopping state.
+2026-04-22 05:16:25   Output dimension of the model is 3072
+2026-04-22 05:16:26   Using GSV-Cities training data from datasets/gsv_cities
+2026-04-22 05:16:26   Start training epoch: 00
+2026-04-22 05:25:10   Finished epoch 00 in 0:08:44, average clean loss = 0.1463, adv rank loss = 0.0000, align loss = 0.0000, total loss = 0.1463, adv batches = 0, skipped adv batches = 1954
+2026-04-22 05:25:10   Extracting database features for evaluation/testing
+2026-04-22 05:26:14   Extracting queries features for evaluation/testing
+2026-04-22 05:26:52   Calculating recalls
+2026-04-22 05:27:25   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 89.5, R@5: 94.6, R@10: 95.8, R@100: 98.0
+2026-04-22 05:27:26   Saved latest checkpoint after epoch 01 (best model updated).
+2026-04-22 05:27:26   Saved intermediate checkpoint checkpoint_epoch_0001.pth after epoch 01 because --save-every=1.
+2026-04-22 05:27:26   Improved: previous best score = -1.0, current score = 184.1, improvement = 185.0852
+2026-04-22 05:27:26   Start training epoch: 01
+2026-04-22 05:36:11   Finished epoch 01 in 0:08:45, average clean loss = 0.1320, adv rank loss = 0.0000, align loss = 0.0000, total loss = 0.1320, adv batches = 0, skipped adv batches = 1954
+2026-04-22 05:36:11   Extracting database features for evaluation/testing
+2026-04-22 05:37:16   Extracting queries features for evaluation/testing
+2026-04-22 05:37:53   Calculating recalls
+2026-04-22 05:38:26   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 89.3, R@5: 94.5, R@10: 95.8, R@100: 98.0
+2026-04-22 05:38:27   Saved latest checkpoint after epoch 02.
+2026-04-22 05:38:27   Saved intermediate checkpoint checkpoint_epoch_0002.pth after epoch 02 because --save-every=1.
+2026-04-22 05:38:27   Not improved: 1 / 15, best score = 184.1, current score = 183.8, delta = -0.2707, required delta = 0.0000
+2026-04-22 05:38:27   Start training epoch: 02
+2026-04-22 05:58:29   Finished epoch 02 in 0:20:01, average clean loss = 0.1287, adv rank loss = 0.0504, align loss = 0.2111, total loss = 0.1519, adv batches = 1954, skipped adv batches = 0
+2026-04-22 05:58:29   Extracting database features for evaluation/testing
+2026-04-22 05:59:33   Extracting queries features for evaluation/testing
+2026-04-22 06:00:11   Calculating recalls
+2026-04-22 06:00:44   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 88.5, R@5: 94.0, R@10: 95.3, R@100: 97.8
+2026-04-22 06:00:45   Saved latest checkpoint after epoch 03.
+2026-04-22 06:00:45   Saved intermediate checkpoint checkpoint_epoch_0003.pth after epoch 03 because --save-every=1.
+2026-04-22 06:00:45   Not improved: 2 / 15, best score = 184.1, current score = 182.4, delta = -1.6420, required delta = 0.0000
+2026-04-22 06:00:45   Start training epoch: 03
+2026-04-22 06:20:47   Finished epoch 03 in 0:20:01, average clean loss = 0.1151, adv rank loss = 0.0434, align loss = 0.1836, total loss = 0.1351, adv batches = 1954, skipped adv batches = 0
+2026-04-22 06:20:47   Extracting database features for evaluation/testing
+2026-04-22 06:21:51   Extracting queries features for evaluation/testing
+2026-04-22 06:22:29   Calculating recalls
+2026-04-22 06:23:02   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 88.2, R@5: 93.9, R@10: 95.3, R@100: 97.7
+2026-04-22 06:23:03   Saved latest checkpoint after epoch 04.
+2026-04-22 06:23:03   Saved intermediate checkpoint checkpoint_epoch_0004.pth after epoch 04 because --save-every=1.
+2026-04-22 06:23:03   Not improved: 3 / 15, best score = 184.1, current score = 182.1, delta = -2.0209, required delta = 0.0000
+2026-04-22 06:23:03   Start training epoch: 04
+2026-04-22 06:43:05   Finished epoch 04 in 0:20:01, average clean loss = 0.1077, adv rank loss = 0.0408, align loss = 0.1753, total loss = 0.1267, adv batches = 1954, skipped adv batches = 0
+2026-04-22 06:43:05   Extracting database features for evaluation/testing
+2026-04-22 06:44:09   Extracting queries features for evaluation/testing
+2026-04-22 06:44:46   Calculating recalls
+2026-04-22 06:45:20   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 88.3, R@5: 93.8, R@10: 95.3, R@100: 97.7
+2026-04-22 06:45:20   Saved latest checkpoint after epoch 05.
+2026-04-22 06:45:21   Saved intermediate checkpoint checkpoint_epoch_0005.pth after epoch 05 because --save-every=1.
+2026-04-22 06:45:21   Not improved: 4 / 15, best score = 184.1, current score = 182.0, delta = -2.0570, required delta = 0.0000
+2026-04-22 06:45:21   Start training epoch: 05
+2026-04-22 07:05:22   Finished epoch 05 in 0:20:01, average clean loss = 0.1024, adv rank loss = 0.0387, align loss = 0.1680, total loss = 0.1205, adv batches = 1954, skipped adv batches = 0
+2026-04-22 07:05:22   Extracting database features for evaluation/testing
+2026-04-22 07:06:27   Extracting queries features for evaluation/testing
+2026-04-22 07:07:04   Calculating recalls
+2026-04-22 07:07:38   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 88.1, R@5: 93.8, R@10: 95.2, R@100: 97.6
+2026-04-22 07:07:38   Saved latest checkpoint after epoch 06.
+2026-04-22 07:07:39   Saved intermediate checkpoint checkpoint_epoch_0006.pth after epoch 06 because --save-every=1.
+2026-04-22 07:07:39   Not improved: 5 / 15, best score = 184.1, current score = 182.0, delta = -2.1292, required delta = 0.0000
+2026-04-22 07:07:39   Start training epoch: 06
+2026-04-22 07:27:40   Finished epoch 06 in 0:20:01, average clean loss = 0.0952, adv rank loss = 0.0361, align loss = 0.1627, total loss = 0.1124, adv batches = 1954, skipped adv batches = 0
+2026-04-22 07:27:40   Extracting database features for evaluation/testing
+2026-04-22 07:28:43   Extracting queries features for evaluation/testing
+2026-04-22 07:29:21   Calculating recalls
+2026-04-22 07:29:54   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 87.8, R@5: 93.6, R@10: 95.0, R@100: 97.6
+2026-04-22 07:29:55   Saved latest checkpoint after epoch 07.
+2026-04-22 07:29:55   Saved intermediate checkpoint checkpoint_epoch_0007.pth after epoch 07 because --save-every=1.
+2026-04-22 07:29:55   Not improved: 6 / 15, best score = 184.1, current score = 181.5, delta = -2.6254, required delta = 0.0000
+2026-04-22 07:29:55   Start training epoch: 07
+2026-04-22 07:49:57   Finished epoch 07 in 0:20:01, average clean loss = 0.0924, adv rank loss = 0.0353, align loss = 0.1601, total loss = 0.1092, adv batches = 1954, skipped adv batches = 0
+2026-04-22 07:49:57   Extracting database features for evaluation/testing
+2026-04-22 07:51:02   Extracting queries features for evaluation/testing
+2026-04-22 07:51:40   Calculating recalls
+2026-04-22 07:52:14   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 87.9, R@5: 93.6, R@10: 95.0, R@100: 97.5
+2026-04-22 07:52:14   Saved latest checkpoint after epoch 08.
+2026-04-22 07:52:15   Saved intermediate checkpoint checkpoint_epoch_0008.pth after epoch 08 because --save-every=1.
+2026-04-22 07:52:15   Not improved: 7 / 15, best score = 184.1, current score = 181.4, delta = -2.6525, required delta = 0.0000
+2026-04-22 07:52:15   Start training epoch: 08
+2026-04-22 08:12:15   Finished epoch 08 in 0:20:00, average clean loss = 0.0901, adv rank loss = 0.0343, align loss = 0.1574, total loss = 0.1066, adv batches = 1954, skipped adv batches = 0
+2026-04-22 08:12:15   Extracting database features for evaluation/testing
+2026-04-22 08:13:19   Extracting queries features for evaluation/testing
+2026-04-22 08:13:57   Calculating recalls
+2026-04-22 08:14:31   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 87.7, R@5: 93.5, R@10: 95.0, R@100: 97.6
+2026-04-22 08:14:31   Saved latest checkpoint after epoch 09.
+2026-04-22 08:14:31   Saved intermediate checkpoint checkpoint_epoch_0009.pth after epoch 09 because --save-every=1.
+2026-04-22 08:14:31   Not improved: 8 / 15, best score = 184.1, current score = 181.2, delta = -2.8870, required delta = 0.0000
+2026-04-22 08:14:31   Start training epoch: 09
+2026-04-22 08:34:32   Finished epoch 09 in 0:20:00, average clean loss = 0.0869, adv rank loss = 0.0335, align loss = 0.1559, total loss = 0.1030, adv batches = 1954, skipped adv batches = 0
+2026-04-22 08:34:32   Extracting database features for evaluation/testing
+2026-04-22 08:35:36   Extracting queries features for evaluation/testing
+2026-04-22 08:36:14   Calculating recalls
+2026-04-22 08:36:47   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 87.8, R@5: 93.6, R@10: 94.9, R@100: 97.5
+2026-04-22 08:36:48   Saved latest checkpoint after epoch 10.
+2026-04-22 08:36:48   Saved intermediate checkpoint checkpoint_epoch_0010.pth after epoch 10 because --save-every=1.
+2026-04-22 08:36:48   Not improved: 9 / 15, best score = 184.1, current score = 181.5, delta = -2.5983, required delta = 0.0000
+2026-04-22 08:36:48   Start training epoch: 10
+2026-04-22 08:56:48   Finished epoch 10 in 0:20:00, average clean loss = 0.0856, adv rank loss = 0.0330, align loss = 0.1553, total loss = 0.1016, adv batches = 1954, skipped adv batches = 0
+2026-04-22 08:56:48   Extracting database features for evaluation/testing
+2026-04-22 08:57:54   Extracting queries features for evaluation/testing
+2026-04-22 08:58:32   Calculating recalls
+2026-04-22 08:59:05   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 87.8, R@5: 93.5, R@10: 94.9, R@100: 97.5
+2026-04-22 08:59:06   Saved latest checkpoint after epoch 11.
+2026-04-22 08:59:06   Saved intermediate checkpoint checkpoint_epoch_0011.pth after epoch 11 because --save-every=1.
+2026-04-22 08:59:06   Not improved: 10 / 15, best score = 184.1, current score = 181.4, delta = -2.7337, required delta = 0.0000
+2026-04-22 08:59:06   Start training epoch: 11
+2026-04-22 09:19:07   Finished epoch 11 in 0:20:00, average clean loss = 0.0834, adv rank loss = 0.0326, align loss = 0.1544, total loss = 0.0993, adv batches = 1954, skipped adv batches = 0
+2026-04-22 09:19:07   Extracting database features for evaluation/testing
+2026-04-22 09:20:10   Extracting queries features for evaluation/testing
+2026-04-22 09:20:48   Calculating recalls
+2026-04-22 09:21:22   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 87.9, R@5: 93.6, R@10: 94.9, R@100: 97.5
+2026-04-22 09:21:22   Saved latest checkpoint after epoch 12.
+2026-04-22 09:21:22   Saved intermediate checkpoint checkpoint_epoch_0012.pth after epoch 12 because --save-every=1.
+2026-04-22 09:21:22   Not improved: 11 / 15, best score = 184.1, current score = 181.5, delta = -2.5442, required delta = 0.0000
+2026-04-22 09:21:22   Start training epoch: 12
+2026-04-22 09:41:22   Finished epoch 12 in 0:20:00, average clean loss = 0.0824, adv rank loss = 0.0320, align loss = 0.1524, total loss = 0.0980, adv batches = 1954, skipped adv batches = 0
+2026-04-22 09:41:22   Extracting database features for evaluation/testing
+2026-04-22 09:42:26   Extracting queries features for evaluation/testing
+2026-04-22 09:43:05   Calculating recalls
+2026-04-22 09:43:38   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 87.8, R@5: 93.5, R@10: 94.8, R@100: 97.5
+2026-04-22 09:43:39   Saved latest checkpoint after epoch 13.
+2026-04-22 09:43:39   Saved intermediate checkpoint checkpoint_epoch_0013.pth after epoch 13 because --save-every=1.
+2026-04-22 09:43:39   Not improved: 12 / 15, best score = 184.1, current score = 181.3, delta = -2.7878, required delta = 0.0000
+2026-04-22 09:43:39   Start training epoch: 13
+2026-04-22 10:03:40   Finished epoch 13 in 0:20:00, average clean loss = 0.0821, adv rank loss = 0.0320, align loss = 0.1522, total loss = 0.0977, adv batches = 1954, skipped adv batches = 0
+2026-04-22 10:03:40   Extracting database features for evaluation/testing
+2026-04-22 10:04:45   Extracting queries features for evaluation/testing
+2026-04-22 10:05:22   Calculating recalls
+2026-04-22 10:05:56   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 87.9, R@5: 93.5, R@10: 94.9, R@100: 97.5
+2026-04-22 10:05:56   Saved latest checkpoint after epoch 14.
+2026-04-22 10:05:57   Saved intermediate checkpoint checkpoint_epoch_0014.pth after epoch 14 because --save-every=1.
+2026-04-22 10:05:57   Not improved: 13 / 15, best score = 184.1, current score = 181.4, delta = -2.7156, required delta = 0.0000
+2026-04-22 10:05:57   Start training epoch: 14
+2026-04-22 10:25:57   Finished epoch 14 in 0:20:00, average clean loss = 0.0810, adv rank loss = 0.0318, align loss = 0.1518, total loss = 0.0966, adv batches = 1954, skipped adv batches = 0
+2026-04-22 10:25:57   Extracting database features for evaluation/testing
+2026-04-22 10:27:02   Extracting queries features for evaluation/testing
+2026-04-22 10:27:40   Calculating recalls
+2026-04-22 10:28:13   Recalls on val set < BaseDataset, msls - #database: 18871; #queries: 11084 >: R@1: 87.8, R@5: 93.4, R@10: 94.9, R@100: 97.4
+2026-04-22 10:28:14   Saved latest checkpoint after epoch 15.
+2026-04-22 10:28:14   Saved intermediate checkpoint checkpoint_epoch_0015.pth after epoch 15 because --save-every=1.
+2026-04-22 10:28:14   Not improved: 14 / 15, best score = 184.1, current score = 181.3, delta = -2.8239, required delta = 0.0000
+2026-04-22 10:28:14   Best validation score (R@1 + R@5): 184.1
+2026-04-22 10:28:14   Trained for 15 epochs, in total in 5:12:07
+2026-04-22 10:28:14   Extracting database features for evaluation/testing
+2026-04-22 10:30:18   Extracting queries features for evaluation/testing
+2026-04-22 10:31:44   Calculating recalls
+2026-04-22 10:34:14   Recalls on < BaseDataset, msls - #database: 36558; #queries: 25622 >: R@1: 71.3, R@5: 83.0, R@10: 85.5, R@100: 90.9

@@ -102,7 +102,7 @@ def get_pretrained_model(args):
     if not os.path.exists(file_path):
         gdd.download_file_from_google_drive(file_id=PRETRAINED_MODELS[model_name],
                                             dest_path=file_path)
-    state_dict = torch.load(file_path, map_location=torch.device('cpu'))
+    state_dict = torch.load(file_path, map_location=torch.device('cpu'), weights_only=False)
     model.load_state_dict(state_dict)
     return model
 
@@ -190,7 +190,7 @@ def get_backbone(args, pretrained_foundation, foundation_model_path):
         if pretrained_foundation:
             assert foundation_model_path is not None, "Please specify foundation model path."
             model_dict = backbone.state_dict()
-            state_dict = torch.load(foundation_model_path)
+            state_dict = torch.load(foundation_model_path, map_location=torch.device('cpu'), weights_only=False)
             model_dict.update(state_dict.items())
             backbone.load_state_dict(model_dict)
 
@@ -212,4 +212,3 @@ def get_backbone(args, pretrained_foundation, foundation_model_path):
 def get_output_channels_dim(model):
     """Return the number of channels in the output of a model."""
     return model(torch.ones([1, 3, 224, 224])).shape[1]
-

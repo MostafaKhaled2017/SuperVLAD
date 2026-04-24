@@ -1,0 +1,14 @@
+2026-04-23 02:31:15   Arguments: Namespace(train_batch_size=60, infer_batch_size=32, criterion='triplet', margin=0.1, epochs_num=1000, patience=3, lr=1e-05, lr_encoder=0.0001, lr_crn_net=0.0005, optim='adam', mixed_precision=False, cache_refresh_rate=1000, queries_per_epoch=5000, negs_num_per_query=10, neg_samples_num=1000, mining='partial', backbone='dino', crossimage_encoder=True, l2='before_pool', supervlad_clusters=4, ghost_clusters=1, pca_dim=None, num_non_local=1, non_local=False, channel_bottleneck=128, fc_output_dim=None, pretrain='imagenet', off_the_shelf='imagenet', trunc_te=None, freeze_te=None, seed=0, foundation_model_path=None, resume='/home/server/repos/SuperVLAD/logs/default/2026-04-22_05-16-06/checkpoint_epoch_0009.pth', device='cuda', num_workers=8, resize=[322, 322], test_method='hard_resize', majority_weight=0.01, efficient_ram_testing=False, val_positive_dist_threshold=25, train_positives_dist_threshold=10, recall_values=[1, 5, 10, 100], brightness=None, contrast=None, saturation=None, hue=None, rand_perspective=None, horizontal_flip=False, random_resized_crop=None, random_rotation=None, eval_datasets_folder='datasets', eval_dataset_name='msls', pca_dataset_folder=None, save_dir='test/batch_fgsm/2026-04-23_00-48-24/positive_distance/2026-04-22_05-16-06__checkpoint_epoch_0009/2026-04-23_02-31-15', epsilons=[0.01, 0.1, 0.2], fgsm_loss='positive_distance', output_json=None, fgsm_negatives=5, fgsm_margin=0.1, resume_eval_dir=None)
+2026-04-23 02:31:15   The outputs are being saved in test/batch_fgsm/2026-04-23_00-48-24/positive_distance/2026-04-22_05-16-06__checkpoint_epoch_0009/2026-04-23_02-31-15
+2026-04-23 02:31:15   using MLP layer as FFN
+2026-04-23 02:31:16   Resuming model from /home/server/repos/SuperVLAD/logs/default/2026-04-22_05-16-06/checkpoint_epoch_0009.pth
+2026-04-23 02:31:30   Test set: < BaseDataset, msls - #database: 36558; #queries: 25622 >
+2026-04-23 02:37:09   Clean recalls on < BaseDataset, msls - #database: 36558; #queries: 25622 >: R@1: 69.5, R@5: 80.8, R@10: 83.5, R@100: 89.4
+2026-04-23 02:37:09   Building FGSM attack targets.
+2026-04-23 02:39:32   Built FGSM attack targets in 142.1 seconds.
+2026-04-23 02:39:32   FGSM attack will evaluate 24344/25622 queries with at least one positive.
+2026-04-23 02:53:48   FGSM eps=0.01 recalls on < BaseDataset, msls - #database: 36558; #queries: 25622 >: R@1: 44.9, R@5: 57.3, R@10: 61.4, R@100: 76.2
+2026-04-23 03:08:07   FGSM eps=0.1 recalls on < BaseDataset, msls - #database: 36558; #queries: 25622 >: R@1: 21.8, R@5: 30.0, R@10: 33.7, R@100: 48.7
+2026-04-23 03:22:23   FGSM eps=0.2 recalls on < BaseDataset, msls - #database: 36558; #queries: 25622 >: R@1: 21.7, R@5: 30.5, R@10: 34.4, R@100: 49.9
+2026-04-23 03:22:23   Saved FGSM evaluation report to test/batch_fgsm/2026-04-23_00-48-24/positive_distance/2026-04-22_05-16-06__checkpoint_epoch_0009/2026-04-23_02-31-15/fgsm_eval_results.json
+2026-04-23 03:22:23   Finished in 0:51:07

@@ -6,7 +6,6 @@ import logging
 import numpy as np
 from collections import OrderedDict
 from os.path import join
-from sklearn.decomposition import PCA
 
 import datasets_ws
 
@@ -17,8 +16,13 @@ def save_checkpoint(args, state, is_best, filename):
         shutil.copyfile(model_path, join(args.save_dir, "best_model.pth"))
 
 
+def load_trusted_checkpoint(path, map_location=None):
+    """Load project checkpoints created by this repo or trusted local weights."""
+    return torch.load(path, map_location=map_location, weights_only=False)
+
+
 def resume_model(args, model):
-    checkpoint = torch.load(args.resume, map_location=args.device)
+    checkpoint = load_trusted_checkpoint(args.resume, map_location=args.device)
     if 'model_state_dict' in checkpoint:
         state_dict = checkpoint['model_state_dict']
     else:
@@ -36,7 +40,7 @@ def resume_model(args, model):
 def resume_train(args, model, optimizer=None, strict=False):
     """Load model, optimizer, and other training parameters"""
     logging.debug(f"Loading checkpoint: {args.resume}")
-    checkpoint = torch.load(args.resume)
+    checkpoint = load_trusted_checkpoint(args.resume, map_location=args.device)
     start_epoch_num = checkpoint["epoch_num"]
     model.load_state_dict(checkpoint["model_state_dict"], strict=strict)
     if optimizer:
@@ -51,6 +55,8 @@ def resume_train(args, model, optimizer=None, strict=False):
 
 
 def compute_pca(args, model, pca_dataset_folder, full_features_dim):
+    from sklearn.decomposition import PCA
+
     model = model.eval()
     pca_ds = datasets_ws.PCADataset(args, args.datasets_folder, pca_dataset_folder)
     dl = torch.utils.data.DataLoader(pca_ds, args.infer_batch_size, shuffle=True)

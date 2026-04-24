@@ -1,12 +1,22 @@
 __pycache__/
 *.pyc
 
+*.pth
+
 checkpoints/
 datasets
-logs/
 results/
-test/
 venv/
+reports/
+
+logs/default
+
+.cache
+.tmp
+
+.venv/
+
+submodules/
 
 reports/
 
