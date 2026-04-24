@@ -9,10 +9,14 @@ results/
 venv/
 reports/
 
+logs/default
+
 .cache
 .tmp
 
 .venv/
+
+submodules/
 
 reports/
 
