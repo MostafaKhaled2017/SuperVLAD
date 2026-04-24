@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import numpy as np
+import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Subset
@@ -94,7 +95,7 @@ def extract_database_features(args, eval_ds, model: nn.Module) -> np.ndarray:
     )
 
     features = np.empty((eval_ds.database_num, args.features_dim), dtype="float32")
-    with np.errstate(all="ignore"):
+    with np.errstate(all="ignore"), torch.inference_mode():
         for inputs, indices in tqdm(dataloader, ncols=100, desc="Database"):
             outputs = model(inputs.to(args.device), queryflag=0).cpu().numpy()
             features[indices.numpy(), :] = outputs
@@ -113,7 +114,7 @@ def extract_clean_query_features(args, eval_ds, model: nn.Module) -> np.ndarray:
     )
 
     features = np.empty((eval_ds.queries_num, args.features_dim), dtype="float32")
-    with np.errstate(all="ignore"):
+    with np.errstate(all="ignore"), torch.inference_mode():
         for inputs, indices in tqdm(dataloader, ncols=100, desc="Queries"):
             outputs = model(inputs.to(args.device), queryflag=0).cpu().numpy()
             local_indices = indices.numpy() - eval_ds.database_num

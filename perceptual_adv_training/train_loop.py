@@ -39,7 +39,7 @@ def compute_attack_losses(
     align_losses = []
     for attack in attacks:
         adv_queries = attack(query_inputs, attack_targets)
-        with amp_autocast(args.mixed_precision, args.device):
+        with amp_autocast(False, args.device):
             adv_query_descriptors = model(adv_queries, queryflag=0)
         adv_query_descriptors = adv_query_descriptors.float()
         rank_loss = compute_rank_loss(
@@ -146,6 +146,7 @@ def run_training(
         epoch_adv_rank_losses: List[float] = []
         epoch_align_losses: List[float] = []
         epoch_total_losses: List[float] = []
+        skipped_nonfinite_batches = 0
 
         for images, place_id in tqdm(train_loader, ncols=100, desc=f"Epoch {epoch_num:02d}"):
             images = images.to(args.device, non_blocking=True)
@@ -163,8 +164,9 @@ def run_training(
             clean_descriptor_view = clean_descriptors_eval.reshape(batch_size, images_per_place, -1)
             rank_targets = select_rank_targets(clean_descriptor_view, place_id, args.adv_negatives)
 
-            step_attacks = train_attacks
-            if args.randomize_attack and len(train_attacks) > 0:
+            use_adversarial_branch = epoch_num >= args.adv_warmup_epochs
+            step_attacks = train_attacks if use_adversarial_branch else []
+            if args.randomize_attack and len(step_attacks) > 0:
                 step_attacks = [train_attacks[np.random.randint(0, len(train_attacks))]]
 
             selected_targets = rank_targets
@@ -208,20 +210,59 @@ def run_training(
 
                 total_loss = clean_loss + attack_outputs["combined_adv_loss"]
 
+            if not torch.isfinite(total_loss):
+                skipped_nonfinite_batches += 1
+                logging.warning(
+                    "Skipping non-finite batch at iter %06d during epoch %02d: clean_loss=%s adv_rank_loss=%s "
+                    "align_loss=%s combined_adv_loss=%s total_loss=%s",
+                    iteration,
+                    epoch_num,
+                    float(clean_loss.detach().item()),
+                    float(attack_outputs["adv_rank_loss"].detach().item()),
+                    float(attack_outputs["align_loss"].detach().item()),
+                    float(attack_outputs["combined_adv_loss"].detach().item()),
+                    float(total_loss.detach().item()),
+                )
+                optimizer.zero_grad(set_to_none=True)
+                iteration += 1
+                continue
+
             if args.mixed_precision:
                 scaler.scale(total_loss).backward()
                 scaler.unscale_(optimizer)
-                nn.utils.clip_grad_value_(model.parameters(), args.clip_grad)
+                grad_norm = nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+                if not torch.isfinite(grad_norm):
+                    skipped_nonfinite_batches += 1
+                    logging.warning(
+                        "Skipping optimizer step with non-finite gradient norm at iter %06d during epoch %02d.",
+                        iteration,
+                        epoch_num,
+                    )
+                    optimizer.zero_grad(set_to_none=True)
+                    scaler.update()
+                    iteration += 1
+                    continue
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 total_loss.backward()
-                nn.utils.clip_grad_value_(model.parameters(), args.clip_grad)
+                grad_norm = nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+                if not torch.isfinite(grad_norm):
+                    skipped_nonfinite_batches += 1
+                    logging.warning(
+                        "Skipping optimizer step with non-finite gradient norm at iter %06d during epoch %02d.",
+                        iteration,
+                        epoch_num,
+                    )
+                    optimizer.zero_grad(set_to_none=True)
+                    iteration += 1
+                    continue
                 optimizer.step()
 
             clean_loss_value = float(clean_loss.item())
             adv_rank_loss_value = float(attack_outputs["adv_rank_loss"].item())
             align_loss_value = float(attack_outputs["align_loss"].item())
+            combined_adv_loss_value = float(attack_outputs["combined_adv_loss"].item())
             total_loss_value = float(total_loss.item())
             epoch_clean_losses.append(clean_loss_value)
             epoch_adv_rank_losses.append(adv_rank_loss_value)
@@ -231,6 +272,7 @@ def run_training(
             writer.add_scalar("train/clean_loss", clean_loss_value, iteration)
             writer.add_scalar("train/adv_rank_loss", adv_rank_loss_value, iteration)
             writer.add_scalar("train/align_loss", align_loss_value, iteration)
+            writer.add_scalar("train/combined_adv_loss", combined_adv_loss_value, iteration)
             writer.add_scalar("train/total_loss", total_loss_value, iteration)
             writer.add_scalar("train/lr", float(optimizer.param_groups[0]["lr"]), iteration)
 
@@ -246,11 +288,12 @@ def run_training(
 
             if iteration % 10 == 0:
                 logging.info(
-                    "ITER %06d\tclean_loss=%.4f\tadv_rank_loss=%.4f\talign_loss=%.4f\ttotal_loss=%.4f",
+                    "ITER %06d\tclean_loss=%.4f\tadv_rank_loss=%.4f\talign_loss=%.4f\tcombined_adv_loss=%.4f\ttotal_loss=%.4f",
                     iteration,
                     clean_loss_value,
                     adv_rank_loss_value,
                     align_loss_value,
+                    combined_adv_loss_value,
                     total_loss_value,
                 )
             iteration += 1
@@ -265,13 +308,14 @@ def run_training(
         writer.add_scalar("epoch/total_loss_mean", mean_total_loss, epoch_num)
 
         logging.info(
-            "Finished epoch %02d in %s, clean loss = %.4f, adv rank loss = %.4f, align loss = %.4f, total loss = %.4f",
+            "Finished epoch %02d in %s, clean loss = %.4f, adv rank loss = %.4f, align loss = %.4f, total loss = %.4f, skipped non-finite batches = %d",
             epoch_num,
             str(datetime.now() - epoch_start)[:-7],
             mean_clean_loss,
             mean_adv_rank_loss,
             mean_align_loss,
             mean_total_loss,
+            skipped_nonfinite_batches,
         )
 
         logging.info("Begin validation")

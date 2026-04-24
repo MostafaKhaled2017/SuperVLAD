@@ -30,7 +30,8 @@ class RetrievalAttackProxy(nn.Module):
         if self.current_targets is None:
             raise RuntimeError("RetrievalAttackProxy.forward() called without targets.")
 
-        with amp_autocast(self.mixed_precision, self.device):
+        # uses mixed precision.
+        with amp_autocast(False, self.device):
             query_descriptors = self.model(inputs, queryflag=0)
         query_descriptors = query_descriptors.float()
         attack_scores = compute_attack_score(
@@ -79,7 +80,10 @@ class RetrievalAttackWrapper(nn.Module):
         self.proxy_model.set_targets(targets)
         fake_labels = torch.zeros(inputs.shape[0], dtype=torch.long, device=inputs.device)
         try:
-            return self.backend(inputs, fake_labels)
+            adv_inputs = self.backend(inputs, fake_labels)
+            perturbations = adv_inputs - inputs
+            perturbations = torch.nan_to_num(perturbations, nan=0.0, posinf=0.0, neginf=0.0)
+            return (inputs + perturbations).detach()
         finally:
             self.proxy_model.clear_targets()
 

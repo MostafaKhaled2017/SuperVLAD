@@ -89,6 +89,12 @@ def build_parser():
         help="Number of hard negatives to use for retrieval attacks.",
     )
     parser.add_argument(
+        "--adv_warmup_epochs",
+        type=int,
+        default=1,
+        help="Number of initial epochs that train only on the clean loss.",
+    )
+    parser.add_argument(
         "--adv_margin",
         type=float,
         default=0.1,
@@ -132,6 +138,8 @@ def parse_arguments():
         raise ValueError("--keep_every must be at least 1")
     if args.adv_negatives < 1:
         raise ValueError("--adv_negatives must be at least 1")
+    if args.adv_warmup_epochs < 0:
+        raise ValueError("--adv_warmup_epochs must be non-negative")
     if args.clip_grad <= 0:
         raise ValueError("--clip_grad must be positive")
 

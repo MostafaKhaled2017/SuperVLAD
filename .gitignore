@@ -16,7 +16,5 @@ logs/default
 
 .venv/
 
-submodules/
-
 reports/
 
