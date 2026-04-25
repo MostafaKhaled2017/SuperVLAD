@@ -2,6 +2,8 @@ import parser as parser_module
 
 from .config import SUPPORTED_ATTACK_NAMES, UNSUPPORTED_ATTACK_NAMES
 
+REQUIRED_RECALL_VALUES = (1, 5, 10, 100)
+
 
 def parse_attack_names(attack_strings):
     attack_names = []
@@ -118,6 +120,12 @@ def build_parser():
         default=None,
         help="Path to the GSV-Cities training dataset.",
     )
+    parser.add_argument(
+        "--skip_initial_validation",
+        action="store_true",
+        default=False,
+        help="Skip baseline validation before the first training epoch.",
+    )
     return parser
 
 
@@ -143,5 +151,6 @@ def parse_arguments():
     if args.clip_grad <= 0:
         raise ValueError("--clip_grad must be positive")
 
+    args.recall_values = list(dict.fromkeys([*args.recall_values, *REQUIRED_RECALL_VALUES]))
     parse_attack_names(args.attack)
     return args

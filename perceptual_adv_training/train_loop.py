@@ -1,6 +1,8 @@
+import csv
+import json
 import logging
 from datetime import datetime
-from os.path import join
+from os.path import exists, join
 from typing import Dict, List, Sequence
 
 import numpy as np
@@ -15,6 +17,9 @@ from .config import amp_autocast, unwrap_model
 from .eval import evaluate_against_attacks_retrieval, make_attack_name
 from .losses import compute_align_loss, compute_rank_loss, loss_function, query_is_correct
 from .targets import RetrievalAttackBatch, select_rank_targets
+
+
+REPORTED_RECALL_VALUES = (1, 5, 10, 100)
 
 
 def compute_attack_losses(
@@ -88,16 +93,13 @@ def compute_attack_losses(
 
 
 def compute_validation_selection_scores(metrics: Dict[str, object]) -> Dict[str, float]:
-    clean_metrics = metrics["NoAttack"]["recalls_list"]
-    clean_score = float(clean_metrics[0] + clean_metrics[1]) if len(clean_metrics) >= 2 else float(clean_metrics[0])
+    clean_score = compute_recall_score(metrics["NoAttack"])
 
     attacked_scores: List[float] = []
     for attack_name, attack_metrics in metrics.items():
         if attack_name == "NoAttack":
             continue
-        attack_recalls = attack_metrics["recalls_list"]
-        attack_score = float(attack_recalls[0] + attack_recalls[1]) if len(attack_recalls) >= 2 else float(attack_recalls[0])
-        attacked_scores.append(attack_score)
+        attacked_scores.append(compute_recall_score(attack_metrics))
 
     if len(attacked_scores) == 0:
         robust_score = clean_score
@@ -109,6 +111,169 @@ def compute_validation_selection_scores(metrics: Dict[str, object]) -> Dict[str,
         "clean_score": clean_score,
         "robust_score": robust_score,
         "selection_score": selection_score,
+    }
+
+
+def recall_value(metric: Dict[str, object], recall_at: int) -> float:
+    key = f"R@{recall_at}"
+    recalls = metric["recalls"]
+    if key not in recalls:
+        raise KeyError(f"Validation metric {key} is missing. Available metrics: {sorted(recalls)}")
+    return float(recalls[key])
+
+
+def compute_recall_score(metric: Dict[str, object]) -> float:
+    return recall_value(metric, 1) + recall_value(metric, 5)
+
+
+def format_reported_recalls(metric: Dict[str, object]) -> str:
+    return ", ".join(f"R@{recall_at}={recall_value(metric, recall_at):.2f}" for recall_at in REPORTED_RECALL_VALUES)
+
+
+def compute_attacked_mean_metrics(metrics: Dict[str, object]) -> Dict[str, object] | None:
+    attacked_metrics = [metric for attack_name, metric in metrics.items() if attack_name != "NoAttack"]
+    if len(attacked_metrics) == 0:
+        return None
+
+    recalls = {}
+    for recall_at in REPORTED_RECALL_VALUES:
+        recalls[f"R@{recall_at}"] = float(np.mean([recall_value(metric, recall_at) for metric in attacked_metrics]))
+
+    return {
+        "recalls": recalls,
+        "recalls_list": [recalls[f"R@{recall_at}"] for recall_at in REPORTED_RECALL_VALUES],
+        "recalls_str": ", ".join(f"R@{recall_at}: {recalls[f'R@{recall_at}']:.1f}" for recall_at in REPORTED_RECALL_VALUES),
+    }
+
+
+def log_validation_recalls(epoch_label: str, metrics: Dict[str, object]) -> None:
+    logging.info("Validation recalls %s clean: %s", epoch_label, format_reported_recalls(metrics["NoAttack"]))
+    for attack_name, attack_metrics in metrics.items():
+        if attack_name == "NoAttack":
+            continue
+        logging.info(
+            "Validation recalls %s attacked/%s: %s",
+            epoch_label,
+            attack_name,
+            format_reported_recalls(attack_metrics),
+        )
+
+    attacked_mean = compute_attacked_mean_metrics(metrics)
+    if attacked_mean is not None:
+        logging.info("Validation recalls %s attacked/mean: %s", epoch_label, format_reported_recalls(attacked_mean))
+
+
+def build_validation_metrics_record(
+    epoch_num: int,
+    metrics: Dict[str, object],
+    validation_scores: Dict[str, float],
+) -> Dict[str, object]:
+    attacks = {
+        attack_name: {f"R@{recall_at}": recall_value(attack_metrics, recall_at) for recall_at in REPORTED_RECALL_VALUES}
+        for attack_name, attack_metrics in metrics.items()
+        if attack_name != "NoAttack"
+    }
+    attacked_mean = compute_attacked_mean_metrics(metrics)
+    return {
+        "epoch": epoch_num,
+        "clean": {f"R@{recall_at}": recall_value(metrics["NoAttack"], recall_at) for recall_at in REPORTED_RECALL_VALUES},
+        "attacks": attacks,
+        "attacked_mean": (
+            {f"R@{recall_at}": recall_value(attacked_mean, recall_at) for recall_at in REPORTED_RECALL_VALUES}
+            if attacked_mean is not None
+            else None
+        ),
+        "clean_score": validation_scores["clean_score"],
+        "robust_score": validation_scores["robust_score"],
+        "selection_score": validation_scores["selection_score"],
+    }
+
+
+def append_validation_metrics(args, record: Dict[str, object]) -> None:
+    csv_path = join(args.save_dir, "validation_recalls.csv")
+    jsonl_path = join(args.save_dir, "validation_recalls.jsonl")
+    fieldnames = [
+        "epoch",
+        "split",
+        "attack",
+        "R@1",
+        "R@5",
+        "R@10",
+        "R@100",
+        "clean_score",
+        "robust_score",
+        "selection_score",
+    ]
+
+    rows = [
+        {
+            "epoch": record["epoch"],
+            "split": "clean",
+            "attack": "NoAttack",
+            **record["clean"],
+            "clean_score": record["clean_score"],
+            "robust_score": record["robust_score"],
+            "selection_score": record["selection_score"],
+        }
+    ]
+    for attack_name, attack_recalls in record["attacks"].items():
+        rows.append(
+            {
+                "epoch": record["epoch"],
+                "split": "attacked",
+                "attack": attack_name,
+                **attack_recalls,
+                "clean_score": record["clean_score"],
+                "robust_score": record["robust_score"],
+                "selection_score": record["selection_score"],
+            }
+        )
+    if record["attacked_mean"] is not None:
+        rows.append(
+            {
+                "epoch": record["epoch"],
+                "split": "attacked_mean",
+                "attack": "mean",
+                **record["attacked_mean"],
+                "clean_score": record["clean_score"],
+                "robust_score": record["robust_score"],
+                "selection_score": record["selection_score"],
+            }
+        )
+
+    write_header = not exists(csv_path)
+    with open(csv_path, "a", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        writer.writerows(rows)
+
+    with open(jsonl_path, "a", encoding="utf-8") as jsonl_file:
+        jsonl_file.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def build_checkpoint_state(
+    args,
+    model,
+    optimizer,
+    epoch_num: int,
+    metrics: Dict[str, object],
+    validation_scores: Dict[str, float],
+    next_best_score: float,
+    next_not_improved: int,
+) -> Dict[str, object]:
+    return {
+        "epoch_num": epoch_num,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "recalls": metrics["NoAttack"]["recalls_list"],
+        "clean_score": validation_scores["clean_score"],
+        "robust_score": validation_scores["robust_score"],
+        "selection_score": validation_scores["selection_score"],
+        "best_r5": next_best_score,
+        "not_improved_num": next_not_improved,
+        "tensorboard_dir": args.tensorboard_dir,
+        "validation_metrics": build_validation_metrics_record(epoch_num, metrics, validation_scores),
     }
 
 
@@ -130,6 +295,44 @@ def run_training(
     start_time = datetime.now()
     lr_drop_epochs = [int(epoch_str) for epoch_str in args.lr_schedule.split(",") if epoch_str.strip()]
     iteration = start_epoch * len(train_loader)
+
+    if start_epoch == 0 and not args.skip_initial_validation:
+        logging.info("Begin initial validation before training")
+        initial_metrics = evaluate_against_attacks_retrieval(
+            args,
+            model,
+            val_ds,
+            validation_attacks,
+            writer=writer,
+            iteration=iteration,
+        )
+        initial_scores = compute_validation_selection_scores(initial_metrics)
+        initial_record = build_validation_metrics_record(-1, initial_metrics, initial_scores)
+        append_validation_metrics(args, initial_record)
+        log_validation_recalls("before training", initial_metrics)
+
+        best_score = initial_scores["selection_score"]
+        not_improved = 0
+        initial_checkpoint_state = build_checkpoint_state(
+            args,
+            model,
+            optimizer,
+            -1,
+            initial_metrics,
+            initial_scores,
+            best_score,
+            not_improved,
+        )
+        util.save_checkpoint(args, initial_checkpoint_state, True, filename="initial_validation_model.pth")
+        writer.add_scalar("val_initial/clean_score", initial_scores["clean_score"], 0)
+        writer.add_scalar("val_initial/robust_score", initial_scores["robust_score"], 0)
+        writer.add_scalar("val_initial/selection_score", initial_scores["selection_score"], 0)
+        logging.info(
+            "Validation scores before training: clean = %.2f, robust = %.2f, selection = %.2f",
+            initial_scores["clean_score"],
+            initial_scores["robust_score"],
+            initial_scores["selection_score"],
+        )
 
     for epoch_num in range(start_epoch, args.epochs_num):
         epoch_start = datetime.now()
@@ -327,11 +530,13 @@ def run_training(
             writer=writer,
             iteration=iteration,
         )
-        clean_metrics = metrics["NoAttack"]["recalls_list"]
         validation_scores = compute_validation_selection_scores(metrics)
         clean_score = validation_scores["clean_score"]
         robust_score = validation_scores["robust_score"]
         selection_score = validation_scores["selection_score"]
+        validation_record = build_validation_metrics_record(epoch_num + 1, metrics, validation_scores)
+        append_validation_metrics(args, validation_record)
+        log_validation_recalls(f"after epoch {epoch_num + 1:02d}", metrics)
 
         writer.add_scalar("val/clean_score", clean_score, epoch_num)
         writer.add_scalar("val/robust_score", robust_score, epoch_num)
@@ -341,18 +546,16 @@ def run_training(
         next_best_score = selection_score if is_best else best_score
         next_not_improved = 0 if is_best else not_improved + 1
 
-        checkpoint_state = {
-            "epoch_num": epoch_num,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "recalls": clean_metrics,
-            "clean_score": clean_score,
-            "robust_score": robust_score,
-            "selection_score": selection_score,
-            "best_r5": next_best_score,
-            "not_improved_num": next_not_improved,
-            "tensorboard_dir": args.tensorboard_dir,
-        }
+        checkpoint_state = build_checkpoint_state(
+            args,
+            model,
+            optimizer,
+            epoch_num,
+            metrics,
+            validation_scores,
+            next_best_score,
+            next_not_improved,
+        )
         util.save_checkpoint(args, checkpoint_state, is_best, filename="last_model.pth")
         intermediate_name = f"checkpoint_epoch_{epoch_num + 1:04d}.pth"
         util.save_checkpoint(args, checkpoint_state, False, filename=intermediate_name)
