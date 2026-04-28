@@ -4,11 +4,10 @@ This repository contains our work on adversarial robustness for visual place rec
 
 In our experiments, we use SuperVLAD as the main model because it is a strong and recent method for the VPR task. The project started from the original SuperVLAD repository, but the focus here is the adversarial robustness study rather than SuperVLAD itself.
 
-Our work has three main parts:
+Our work has two main parts:
 
 1. Retrieval-aware adversarial training evaluated with FGSM attacks.
-2. FGSM adversarial training with different training epsilon values.
-3. Perceptual adversarial training adapted from classification to the VPR setting.
+2. Perceptual adversarial training adapted from classification to the VPR setting.
 
 ## Project Contents
 
