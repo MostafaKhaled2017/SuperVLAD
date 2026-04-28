@@ -18,12 +18,13 @@ exec python3 perceptual_adv_training.py \
   --supervlad_clusters=4 \
   --crossimage_encoder \
   --freeze_te=8 \
-  --lr=0.00005 \
+  --lr=0.000005 \
   --num_epochs=50 \
-  --batch_size=4 \
-  --attack "FastLagrangePerceptualAttack(model, bound=0.5, num_iterations=5)" \
-  --attack "PerceptualPGDAttack(model, bound=0.5, num_iterations=3)" \
-  --adv_loss_weight=1.0 \
-  --adv_align_weight=0.05 \
+  --batch_size=16 \
+  --attack "FastLagrangePerceptualAttack(model, bound=0.1, num_iterations=5)" \
+  --attack "PerceptualPGDAttack(model, bound=0.1, num_iterations=3)" \
+  --adv_loss_weight=0.25 \
+  --adv_align_weight=0.2 \
   --adv_negatives=5 \
-  --mixed_precision
+  --val_batches=100 \
+  # --mixed_precision

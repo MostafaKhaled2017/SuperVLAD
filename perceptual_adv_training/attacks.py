@@ -1,14 +1,27 @@
 import math
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Sequence
 
 import torch
 from torch import Tensor, nn
 
-from .config import amp_autocast, unwrap_model
+from .config import IMAGENET_MEAN, IMAGENET_STD, amp_autocast, unwrap_model
 from .losses import compute_attack_score
 from .targets import RetrievalAttackBatch
+
+
+def normalized_to_pixels(inputs: Tensor) -> Tensor:
+    mean = IMAGENET_MEAN.to(device=inputs.device, dtype=inputs.dtype)
+    std = IMAGENET_STD.to(device=inputs.device, dtype=inputs.dtype)
+    return inputs * std + mean
+
+
+def pixels_to_normalized(inputs: Tensor) -> Tensor:
+    mean = IMAGENET_MEAN.to(device=inputs.device, dtype=inputs.dtype)
+    std = IMAGENET_STD.to(device=inputs.device, dtype=inputs.dtype)
+    return (inputs - mean) / std
 
 
 class RetrievalAttackProxy(nn.Module):
@@ -30,8 +43,9 @@ class RetrievalAttackProxy(nn.Module):
         if self.current_targets is None:
             raise RuntimeError("RetrievalAttackProxy.forward() called without targets.")
 
-        with amp_autocast(self.mixed_precision, self.device):
-            query_descriptors = self.model(inputs, queryflag=0)
+        normalized_inputs = pixels_to_normalized(inputs)
+        with amp_autocast(False, self.device):
+            query_descriptors = self.model(normalized_inputs, queryflag=0)
         query_descriptors = query_descriptors.float()
         attack_scores = compute_attack_score(
             query_descriptors,
@@ -53,6 +67,24 @@ class UnsupportedAttack(nn.Module):
             f"{self.attack_name} is not supported in perceptual_adv_training.py because it depends on "
             "classification-specific AutoAttack behavior."
         )
+
+
+@contextmanager
+def attack_generation_context(model: nn.Module):
+    parameters = list(model.parameters())
+    original_requires_grad = [parameter.requires_grad for parameter in parameters]
+    original_training = [(module, module.training) for module in model.modules()]
+
+    try:
+        for parameter in parameters:
+            parameter.requires_grad_(False)
+        model.eval()
+        yield
+    finally:
+        for module, training in original_training:
+            module.train(training)
+        for parameter, requires_grad in zip(parameters, original_requires_grad):
+            parameter.requires_grad_(requires_grad)
 
 
 class RetrievalAttackWrapper(nn.Module):
@@ -79,7 +111,11 @@ class RetrievalAttackWrapper(nn.Module):
         self.proxy_model.set_targets(targets)
         fake_labels = torch.zeros(inputs.shape[0], dtype=torch.long, device=inputs.device)
         try:
-            return self.backend(inputs, fake_labels)
+            pixel_inputs = normalized_to_pixels(inputs).clamp(0.0, 1.0)
+            with attack_generation_context(self.proxy_model.model):
+                adv_pixels = self.backend(pixel_inputs, fake_labels)
+            adv_pixels = torch.nan_to_num(adv_pixels, nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+            return pixels_to_normalized(adv_pixels).detach()
         finally:
             self.proxy_model.clear_targets()
 

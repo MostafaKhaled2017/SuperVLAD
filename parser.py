@@ -18,7 +18,7 @@ def build_parser():
                         help="margin for the triplet loss")
     parser.add_argument("--epochs_num", type=int, default=1000,
                         help="number of epochs to train for")
-    parser.add_argument("--patience", type=int, default=3)
+    parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--lr", type=float, default=0.00001, help="_")
     parser.add_argument("--lr_encoder", type=float, default=0.0001, help="Learning rate for the cross-image encoder")
     parser.add_argument("--lr_crn_net", type=float, default=5e-4, help="Learning rate to finetune pretrained network when using CRN")

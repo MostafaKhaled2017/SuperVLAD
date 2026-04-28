@@ -2,6 +2,8 @@ import parser as parser_module
 
 from .config import SUPPORTED_ATTACK_NAMES, UNSUPPORTED_ATTACK_NAMES
 
+REQUIRED_RECALL_VALUES = (1, 5, 10, 100)
+
 
 def parse_attack_names(attack_strings):
     attack_names = []
@@ -89,6 +91,12 @@ def build_parser():
         help="Number of hard negatives to use for retrieval attacks.",
     )
     parser.add_argument(
+        "--adv_warmup_epochs",
+        type=int,
+        default=1,
+        help="Number of initial epochs that train only on the clean loss.",
+    )
+    parser.add_argument(
         "--adv_margin",
         type=float,
         default=0.1,
@@ -112,6 +120,12 @@ def build_parser():
         default=None,
         help="Path to the GSV-Cities training dataset.",
     )
+    parser.add_argument(
+        "--skip_initial_validation",
+        action="store_true",
+        default=False,
+        help="Skip baseline validation before the first training epoch.",
+    )
     return parser
 
 
@@ -132,8 +146,11 @@ def parse_arguments():
         raise ValueError("--keep_every must be at least 1")
     if args.adv_negatives < 1:
         raise ValueError("--adv_negatives must be at least 1")
+    if args.adv_warmup_epochs < 0:
+        raise ValueError("--adv_warmup_epochs must be non-negative")
     if args.clip_grad <= 0:
         raise ValueError("--clip_grad must be positive")
 
+    args.recall_values = list(dict.fromkeys([*args.recall_values, *REQUIRED_RECALL_VALUES]))
     parse_attack_names(args.attack)
     return args

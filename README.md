@@ -1,13 +1,44 @@
-# SuperVLAD
-This is the official repository for the NeurIPS 2024 paper "[SuperVLAD: Compact and Robust Image Descriptors for Visual Place Recognition](https://proceedings.neurips.cc/paper_files/paper/2024/hash/0b135d408253205ba501d55c6539bfc7-Abstract-Conference.html)".
+# Adversarial Robustness for Visual Place Recognition
 
-<img src="image/architecture.png" width="800px">
+This repository contains our work on adversarial robustness for visual place recognition. The main goal of the project is to study how VPR systems behave under adversarial attacks and how their robustness can be improved with retrieval-aware defense methods.
 
-## Getting Started
+In our experiments, we use SuperVLAD as the main model because it is a strong and recent method for the VPR task. The project started from the original SuperVLAD repository, but the focus here is the adversarial robustness study rather than SuperVLAD itself.
 
-This repo follows the framework of [GSV-Cities](https://github.com/amaralibey/gsv-cities) for training, and the [Visual Geo-localization Benchmark](https://github.com/gmberton/deep-visual-geo-localization-benchmark) for evaluation. You can download the GSV-Cities datasets [HERE](https://www.kaggle.com/datasets/amaralibey/gsv-cities), and refer to [VPR-datasets-downloader](https://github.com/gmberton/VPR-datasets-downloader) to prepare test datasets.
+Our work has three main parts:
 
-The test dataset should be organized in a directory tree as such:
+1. Retrieval-aware adversarial training evaluated with FGSM attacks.
+2. FGSM adversarial training with different training epsilon values.
+3. Perceptual adversarial training adapted from classification to the VPR setting.
+
+## Project Contents
+
+- `adv_train.py`: retrieval-aware adversarial training for FGSM-style robustness.
+- `fgsm_eval.py`: FGSM robustness evaluation on clean and attacked queries.
+- `perceptual_adv_training/`: adapted perceptual adversarial training package for the VPR setting. This directory contains the code that replaces classification-oriented assumptions with retrieval-aware components. It defines the retrieval targets, rank-style losses, attack wrappers, and evaluation logic used by the perceptual adversarial training workflow.
+- `perceptual_adv_training.py`: entry point that launches the perceptual adversarial training package.
+- `scripts/adv_training_different_epsilons.sh`: runs FGSM adversarial training with different epsilon values.
+- `scripts/run_fgsm_checkpoint_list_eval.sh`: evaluates a list of checkpoints with FGSM.
+- `scripts/run_perceptual_adv_training.sh`: runs perceptual adversarial training.
+
+## Models and Checkpoints
+
+The experiments in this repository use SuperVLAD as the main VPR model. The repo uses a base SuperVLAD checkpoint and saves experiment checkpoints locally during training.
+
+- Base SuperVLAD checkpoint: [download link](https://drive.google.com/file/d/1yomnWGTJko6nf3F2Ju6RWsLhP2EG82tL/view?usp=drive_link)
+- Trained models checkpoints: [download link](https://drive.google.com/drive/folders/1dP61euhUI2I5e9e-FE1A_Vvf09b-fLQ1?usp=sharing)
+
+
+## Datasets and Setup
+
+This repo follows the framework of [GSV-Cities](https://github.com/amaralibey/gsv-cities) for training and the [Visual Geo-localization Benchmark](https://github.com/gmberton/deep-visual-geo-localization-benchmark) for evaluation.
+
+You can download:
+
+- GSV-Cities from [Kaggle](https://www.kaggle.com/datasets/amaralibey/gsv-cities)
+- evaluation datasets with [VPR-datasets-downloader](https://github.com/gmberton/VPR-datasets-downloader)
+- the DINOv2 ViT-B/14 checkpoint from [here](https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/dinov2_vitb14_pretrain.pth)
+
+An example evaluation dataset layout is:
 
 ```
 ├── datasets_vg
@@ -95,60 +126,63 @@ Set `--supervlad_clusters=1` and `--ghost_clusters=2` to run the 1-cluster VLAD.
 python3 eval.py --eval_datasets_folder=/path/to/your/datasets_vg/datasets --eval_dataset_name=msls --resume=/path/to/trained/model/1-clusterVLAD.pth --backbone=dino --supervlad_clusters=1 --ghost_clusters=2
 ```
 
-## Training with Automatic Mixed Precision
+### 4. Training With Different FGSM Epsilon Values
 
-If you want to train models with Automatic Mixed Precision for faster training speed and less GPU memory usage. Just add parameter `--mixed_precision`. In this case, the cross-image encoder is not optimized separately and may not perform well.
+Use:
 
-## Trained Model
+```bash
+bash scripts/adv_training_different_epsilons.sh
+```
 
-<table style="margin: auto">
-  <thead>
-    <tr>
-      <th>model</th>
-      <th>cross-image<br />encoder</th>
-      <th>download</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>SuperVLAD</td>
-      <td align="center">:white_check_mark:</td>
-      <td><a href="https://drive.google.com/file/d/1yomnWGTJko6nf3F2Ju6RWsLhP2EG82tL/view?usp=drive_link">LINK</a></td>
-    </tr>
-    <tr>
-      <td>SuperVLAD</td>
-      <td align="center">:x:</td>
-      <td><a href="https://drive.google.com/file/d/1wRkUO4E8s5hNRNNIWcuA8RUvlGob3Tbf/view?usp=drive_link">LINK</a></td>
-    </tr>
-    <tr>
-      <td>1-ClusterVLAD</td>
-      <td align="center">:x:</td>
-      <td><a href="https://drive.google.com/file/d/1pQcJx9n2-keAh9TttssZkz6D0vjpFWU6/view?usp=drive_link">LINK</a></td>
-    </tr>
-  </tbody>
-</table>
+Then evaluate saved checkpoints with:
+
+```bash
+bash scripts/run_fgsm_checkpoint_list_eval.sh
+```
+
+### 5. Perceptual Adversarial Training
+
+Use:
+
+```bash
+bash scripts/run_perceptual_adv_training.sh
+```
+
+This part of the project adapts a classification-based perceptual adversarial training pipeline so it can work in the VPR setting, with SuperVLAD used as the experimental model together with retrieval targets, rank-style losses, and recall-based validation.
+
+## Evaluation and Monitoring
+
+To evaluate a checkpoint on the retrieval benchmark:
+
+```bash
+python3 eval.py \
+  --eval_datasets_folder=/path/to/datasets_vg/datasets \
+  --eval_dataset_name=msls \
+  --resume=/path/to/model.pth \
+  --backbone=dino \
+  --supervlad_clusters=4 \
+  --crossimage_encoder \
+  --infer_batch_size=8
+```
+
+To monitor training:
+
+```bash
+tensorboard --logdir logs
+```
+
+## Notes
+
+- Remove `--crossimage_encoder` to run SuperVLAD without the cross-image encoder.
+- Set `--supervlad_clusters=1 --ghost_clusters=2` to run the 1-cluster VLAD setup.
+- Add `--mixed_precision` if you want mixed precision training.
 
 ## Acknowledgements
 
-Parts of this repo are inspired by the following repositories:
+This project builds on ideas and code from:
 
-[GSV-Cities](https://github.com/amaralibey/gsv-cities)
-
-[Visual Geo-localization Benchmark](https://github.com/gmberton/deep-visual-geo-localization-benchmark)
-
-[DINOv2](https://github.com/facebookresearch/dinov2)
-
-## Citation
-
-If you find this repo useful for your research, please cite the paper
-
-```
-@inproceedings{lu2024supervlad,
-  title={SuperVLAD: Compact and Robust Image Descriptors for Visual Place Recognition},
-  author={Lu, Feng and Zhang, Xinyao and Ye, Canming and Dong, Shuting and Zhang, Lijun and Lan, Xiangyuan and Yuan, Chun},
-  booktitle={Advances in Neural Information Processing Systems},
-  volume={37},
-  pages={5789--5816},
-  year={2024}
-}
-```
+- [SuperVLAD](https://proceedings.neurips.cc/paper_files/paper/2024/hash/0b135d408253205ba501d55c6539bfc7-Abstract-Conference.html)
+- [GSV-Cities](https://github.com/amaralibey/gsv-cities)
+- [Visual Geo-localization Benchmark](https://github.com/gmberton/deep-visual-geo-localization-benchmark)
+- [DINOv2](https://github.com/facebookresearch/dinov2)
+- [perceptual-advex](https://github.com/cassidylaidlaw/perceptual-advex)
