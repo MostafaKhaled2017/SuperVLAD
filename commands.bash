@@ -27,7 +27,7 @@ python3 fgsm_eval.py --eval_datasets_folder=datasets --eval_dataset_name=msls \
 
 python3 perceptual_eval.py \
   --eval_datasets_folder=datasets \
-  --datasets sped nordland msls \
+  --datasets msls sped nordland \
   --base_resume=checkpoints/SuperVLAD.pth \
   --trained_resume=checkpoints/perceptual_adv_checkpoint.pth \
   --foundation_model_path=checkpoints/dinov2_vitb14_pretrain.pth \
@@ -37,7 +37,5 @@ python3 perceptual_eval.py \
   --freeze_te=8 \
   --infer_batch_size=16 \
   --test_method=hard_resize \
-  --attack "FastLagrangePerceptualAttack(model, bound=0.1, num_iterations=5)" \
-  --attack "PerceptualPGDAttack(model, bound=0.1, num_iterations=3)" \
-  --output_json test/perceptual_eval/sped_nordland_msls_comparison.json \
-  --output_csv test/perceptual_eval/sped_nordland_msls_comparison.csv
+  --output_json=test/perceptual_eval/msls_sped_nordland_comparison.json \
+  --output_csv=test/perceptual_eval/msls_sped_nordland_comparison.csv
