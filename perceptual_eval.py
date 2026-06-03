@@ -50,6 +50,13 @@ def build_parser():
         help="Attack expression(s) to evaluate, following perceptual_adv_training.py syntax.",
     )
     parser.add_argument(
+        "--adv_margin",
+        type=float,
+        default=0.1,
+        help="Margin used for the retrieval adversarial objective.",
+    )
+    parser.add_argument("--lpips_model", type=str, default=None, help="Optional LPIPS model override.")
+    parser.add_argument(
         "--output_json",
         type=str,
         required=True,
