@@ -24,3 +24,20 @@ python3 fgsm_eval.py --eval_datasets_folder=datasets --eval_dataset_name=msls \
   --resume=logs/default/2026-04-19_14-15-55/checkpoint_epoch_0002.pth \
   --backbone=dino --supervlad_clusters=4 --crossimage_encoder \
   --infer_batch_size=32 --epsilons 0.01 0.1 0.2 --fgsm_loss positive_distance
+
+python3 perceptual_eval.py \
+  --eval_datasets_folder=datasets \
+  --datasets sped nordland msls \
+  --base_resume=checkpoints/SuperVLAD.pth \
+  --trained_resume=checkpoints/perceptual_adv_checkpoint.pth \
+  --foundation_model_path=checkpoints/dinov2_vitb14_pretrain.pth \
+  --backbone=dino \
+  --supervlad_clusters=4 \
+  --crossimage_encoder \
+  --freeze_te=8 \
+  --infer_batch_size=16 \
+  --test_method=hard_resize \
+  --attack "FastLagrangePerceptualAttack(model, bound=0.1, num_iterations=5)" \
+  --attack "PerceptualPGDAttack(model, bound=0.1, num_iterations=3)" \
+  --output_json test/perceptual_eval/sped_nordland_msls_comparison.json \
+  --output_csv test/perceptual_eval/sped_nordland_msls_comparison.csv
