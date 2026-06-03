@@ -155,9 +155,10 @@ def build_output_paths(args) -> Tuple[Path, Path, Path]:
         run_dir = output_json.parent / f"perceptual_eval_{timestamp}"
 
     output_csv = Path(args.output_csv).expanduser() if args.output_csv else output_json.with_suffix(".csv")
-    run_dir.mkdir(parents=True, exist_ok=True)
-    output_json.parent.mkdir(parents=True, exist_ok=True)
-    output_csv.parent.mkdir(parents=True, exist_ok=True)
+    if output_json.parent != run_dir:
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+    if output_csv.parent != run_dir:
+        output_csv.parent.mkdir(parents=True, exist_ok=True)
     return output_json, output_csv, run_dir
 
 
